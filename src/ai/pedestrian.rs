@@ -1,0 +1,400 @@
+//! Sidewalk pedestrians.
+//!
+//! Pedestrians walk the same road graph as traffic, offset past the kerb onto
+//! the pavement. There is no separate navmesh: the city generator already
+//! produces the only walkable topology that exists here, and a Recast navmesh
+//! would add a heavy dependency to solve a problem the grid does not have.
+//!
+//! They are kinematic rather than dynamic. A crowd of dynamic ragdolls is
+//! expensive and constantly jostling itself into the road; kinematic bodies
+//! still register against spatial queries, which is what M5's gunfire and
+//! hit-and-run detection actually need from them.
+//!
+//! Their motion is authored straight onto `Transform` rather than through
+//! `LinearVelocity`. Avian syncs a changed `Transform` back into `Position`, so
+//! writing rotation each frame to face the walk direction silently reverted the
+//! position it had just integrated and every pedestrian stood still. Driving
+//! the transform outright avoids fighting the engine over who owns the pose.
+
+use avian3d::prelude::*;
+use bevy::prelude::*;
+use rand::RngExt;
+use rand_chacha::ChaCha8Rng;
+
+use super::steering::right_of;
+use crate::core::config::GameConfig;
+use crate::core::rng::{stream, stream_for};
+use crate::core::schedule::GameSet;
+use crate::player::on_foot::Player;
+use crate::world::City;
+use crate::world::buildings::SIDEWALK_HEIGHT;
+use crate::world::roadgraph::NodeId;
+
+const POPULATION: usize = 45;
+const SPAWN_MIN: f32 = 25.0;
+const SPAWN_MAX: f32 = 110.0;
+const DESPAWN: f32 = 165.0;
+
+/// How far past the kerb the pavement centre sits.
+const PAVEMENT_OFFSET: f32 = 1.9;
+const RADIUS: f32 = 0.32;
+const HEIGHT: f32 = 1.05;
+
+const WALK_SPEED: f32 = 1.5;
+const FLEE_SPEED: f32 = 5.4;
+/// A vehicle closer than this and moving fast enough is worth running from.
+const SCARE_RADIUS: f32 = 14.0;
+const SCARE_SPEED: f32 = 6.0;
+
+#[derive(Component)]
+pub struct Pedestrian {
+    pub from: NodeId,
+    pub to: NodeId,
+    /// Which pavement: +1 right of travel, -1 left.
+    pub side: f32,
+    pub speed: f32,
+    /// Counts down while fleeing; keeps them running a moment after the danger
+    /// passes rather than snapping back to a stroll.
+    pub panic: f32,
+}
+
+#[derive(Resource)]
+pub struct PedestrianRng(pub ChaCha8Rng);
+
+#[derive(Resource)]
+struct PedestrianTimer(Timer);
+
+impl Default for PedestrianTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(0.6, TimerMode::Repeating))
+    }
+}
+
+#[derive(Resource)]
+struct PedestrianAssets {
+    body: Handle<Mesh>,
+    clothes: Vec<Handle<StandardMaterial>>,
+}
+
+pub struct PedestrianPlugin;
+
+impl Plugin for PedestrianPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<PedestrianTimer>()
+            .add_systems(Startup, setup)
+            .add_systems(
+                Update,
+                (maintain_population, walk_pavements)
+                    .chain()
+                    .in_set(GameSet::Ai),
+            );
+    }
+}
+
+fn setup(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    commands.insert_resource(PedestrianRng(stream_for(
+        config.world_seed,
+        stream::PEDESTRIANS,
+    )));
+
+    let palette = [
+        Color::srgb(0.24, 0.30, 0.42),
+        Color::srgb(0.48, 0.26, 0.24),
+        Color::srgb(0.30, 0.36, 0.28),
+        Color::srgb(0.55, 0.50, 0.42),
+        Color::srgb(0.20, 0.22, 0.26),
+        Color::srgb(0.42, 0.38, 0.52),
+    ];
+    commands.insert_resource(PedestrianAssets {
+        body: meshes.add(Capsule3d {
+            radius: RADIUS,
+            half_length: HEIGHT * 0.5,
+        }),
+        clothes: palette
+            .into_iter()
+            .map(|color| {
+                materials.add(StandardMaterial {
+                    base_color: color,
+                    perceptual_roughness: 0.85,
+                    ..default()
+                })
+            })
+            .collect(),
+    });
+}
+
+/// Centre of the pavement alongside the segment `a -> b`.
+fn pavement_point(a: Vec2, b: Vec2, width: f32, side: f32, t: f32) -> Vec2 {
+    let Ok(direction) = Dir2::new(b - a) else {
+        return a;
+    };
+    a.lerp(b, t) + right_of(*direction) * side * (width * 0.5 + PAVEMENT_OFFSET)
+}
+
+fn maintain_population(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut timer: ResMut<PedestrianTimer>,
+    city: Res<City>,
+    assets: Res<PedestrianAssets>,
+    mut rng: ResMut<PedestrianRng>,
+    players: Query<&Transform, With<Player>>,
+    pedestrians: Query<(Entity, &Transform), With<Pedestrian>>,
+) {
+    if !timer.0.tick(time.delta()).just_finished() {
+        return;
+    }
+    let Ok(player) = players.single() else { return };
+    let focus = player.translation.xz();
+
+    let mut alive = 0usize;
+    for (entity, transform) in &pedestrians {
+        if transform.translation.xz().distance(focus) > DESPAWN {
+            commands.entity(entity).despawn();
+        } else {
+            alive += 1;
+        }
+    }
+    if alive >= POPULATION {
+        return;
+    }
+
+    let candidates: Vec<_> = city
+        .graph
+        .edges()
+        .filter(|edge| {
+            let midpoint = city
+                .graph
+                .node(edge.a)
+                .pos
+                .midpoint(city.graph.node(edge.b).pos);
+            (SPAWN_MIN..SPAWN_MAX).contains(&midpoint.distance(focus))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+
+    while alive < POPULATION {
+        let edge = candidates[rng.0.random_range(0..candidates.len())];
+        let (from, to) = if rng.0.random_range(0.0..1.0) < 0.5 {
+            (edge.a, edge.b)
+        } else {
+            (edge.b, edge.a)
+        };
+        let a = city.graph.node(from).pos;
+        let b = city.graph.node(to).pos;
+        let side = if rng.0.random_range(0.0..1.0) < 0.5 {
+            1.0
+        } else {
+            -1.0
+        };
+        let t: f32 = rng.0.random_range(0.1..0.9);
+        let position = pavement_point(a, b, edge.width, side, t);
+        let material = assets.clothes[rng.0.random_range(0..assets.clothes.len())].clone();
+
+        commands.spawn((
+            Name::new("Pedestrian"),
+            Pedestrian {
+                from,
+                to,
+                side,
+                speed: rng.0.random_range(1.1..1.9),
+                panic: 0.0,
+            },
+            Mesh3d(assets.body.clone()),
+            MeshMaterial3d(material),
+            Transform::from_xyz(
+                position.x,
+                SIDEWALK_HEIGHT + HEIGHT * 0.5 + RADIUS,
+                position.y,
+            ),
+            // Kinematic: pushed by nothing, but still visible to raycasts.
+            RigidBody::Kinematic,
+            Collider::capsule(RADIUS, HEIGHT),
+            LockedAxes::ROTATION_LOCKED,
+            crate::combat::health::Health::new(40.0),
+            crate::crime::wanted::Witness,
+        ));
+        alive += 1;
+    }
+}
+
+fn walk_pavements(
+    time: Res<Time>,
+    mut report: Local<f32>,
+    city: Res<City>,
+    spatial: SpatialQuery,
+    mut rng: ResMut<PedestrianRng>,
+    vehicles: Query<(&Transform, &LinearVelocity), With<crate::vehicle::spawn::Vehicle>>,
+    mut pedestrians: Query<
+        (Entity, &mut Pedestrian, &mut Transform),
+        Without<crate::vehicle::spawn::Vehicle>,
+    >,
+) {
+    let dt = time.delta_secs();
+
+    // Anything moving fast enough to be worth running from.
+    let threats: Vec<(Vec2, f32)> = vehicles
+        .iter()
+        .filter(|(_, velocity)| velocity.length() > SCARE_SPEED)
+        .map(|(transform, velocity)| (transform.translation.xz(), velocity.length()))
+        .collect();
+
+    *report += dt;
+    let announce = *report > 1.0;
+    if announce {
+        *report = 0.0;
+    }
+    let mut sample = None;
+
+    for (entity, mut pedestrian, mut transform) in &mut pedestrians {
+        let position = transform.translation.xz();
+        let a = city.graph.node(pedestrian.from).pos;
+        let b = city.graph.node(pedestrian.to).pos;
+
+        // Arrived at the junction: pick a new street to walk down.
+        if position.distance(b) < 4.0 {
+            let next = city
+                .graph
+                .neighbors(pedestrian.to)
+                .map(|(node, _)| node)
+                .filter(|node| *node != pedestrian.from)
+                .choose(&mut rng.0)
+                .unwrap_or(pedestrian.from);
+            pedestrian.from = pedestrian.to;
+            pedestrian.to = next;
+            continue;
+        }
+
+        let width = city
+            .graph
+            .neighbors(pedestrian.from)
+            .find(|(node, _)| *node == pedestrian.to)
+            .map(|(_, edge)| city.graph.edge(edge).width)
+            .unwrap_or(9.0);
+
+        let segment = b - a;
+        let length = segment.length().max(1.0);
+        let travelled = ((position - a).dot(segment) / (length * length)).clamp(0.0, 1.0);
+        let target = pavement_point(
+            a,
+            b,
+            width,
+            pedestrian.side,
+            (travelled + 6.0 / length).min(1.0),
+        );
+
+        let mut heading = (target - position).normalize_or_zero();
+
+        // Bolt away from anything bearing down on them.
+        pedestrian.panic = (pedestrian.panic - dt).max(0.0);
+        for (threat, _) in &threats {
+            let away = position - *threat;
+            if away.length() < SCARE_RADIUS {
+                pedestrian.panic = 1.6;
+                heading = (heading + away.normalize_or_zero() * 2.0).normalize_or_zero();
+            }
+        }
+
+        let speed = if pedestrian.panic > 0.0 {
+            FLEE_SPEED
+        } else {
+            pedestrian.speed.min(WALK_SPEED * 1.3)
+        };
+
+        let step = heading * speed * dt;
+        transform.translation.x += step.x;
+        transform.translation.z += step.y;
+
+        // Follow the ground rather than holding pavement height: crossing a
+        // road otherwise leaves them walking on air the depth of a kerb.
+        //
+        // The cast must exclude the pedestrian itself. Starting it above their
+        // own head means the first thing an unfiltered ray hits is their own
+        // capsule, which reads as ground one body-height up — and they levitate,
+        // gaining a metre and a half every frame.
+        let above = transform.translation + Vec3::Y * 2.0;
+        let filter = SpatialQueryFilter::from_excluded_entities([entity]);
+        if let Some(ground) = spatial.cast_ray(above, Dir3::NEG_Y, 6.0, true, &filter) {
+            let stand = (above.y - ground.distance) + HEIGHT * 0.5 + RADIUS;
+            // Ignore implausible surfaces (another pedestrian, a car roof); a
+            // kerb is centimetres, not metres.
+            if (stand - transform.translation.y).abs() < 1.2 {
+                // Ease on, so a kerb is a step rather than a snap.
+                transform.translation.y = transform.translation.y.lerp(stand, 12.0 * dt);
+            }
+        }
+        if heading != Vec2::ZERO {
+            transform.rotation =
+                Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(heading));
+        }
+
+        if sample.is_none() {
+            sample = Some((transform.translation, speed, pedestrian.panic));
+        }
+    }
+
+    if announce && let Some((position, speed, panic)) = sample {
+        debug!(
+            "pedestrians: {} walking, sample at {:.1},{:.2},{:.1} moving {:.2} m/s panic {:.1}",
+            pedestrians.iter().len(),
+            position.x,
+            position.y,
+            position.z,
+            speed,
+            panic
+        );
+    }
+}
+
+/// Convenience for picking a random element without collecting.
+trait ChooseExt: Iterator + Sized {
+    fn choose(self, rng: &mut ChaCha8Rng) -> Option<Self::Item> {
+        let items: Vec<_> = self.collect();
+        if items.is_empty() {
+            return None;
+        }
+        let index = rng.random_range(0..items.len());
+        items.into_iter().nth(index)
+    }
+}
+impl<I: Iterator> ChooseExt for I {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pavements_sit_outside_the_carriageway() {
+        let a = Vec2::ZERO;
+        let b = Vec2::new(0.0, 100.0);
+        let width = 10.0;
+
+        for side in [1.0, -1.0] {
+            let point = pavement_point(a, b, width, side, 0.5);
+            let lateral = point.x.abs();
+            assert!(
+                lateral > width * 0.5,
+                "pavement at {lateral:.2}m is still inside a {width}m road"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_pavements_are_on_opposite_sides() {
+        let a = Vec2::ZERO;
+        let b = Vec2::new(100.0, 0.0);
+        let left = pavement_point(a, b, 9.0, -1.0, 0.5);
+        let right = pavement_point(a, b, 9.0, 1.0, 0.5);
+        assert!(
+            left.y * right.y < 0.0,
+            "both pavements landed on the same side: {left:?} / {right:?}"
+        );
+    }
+}

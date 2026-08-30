@@ -1,0 +1,213 @@
+//! Chunk streaming.
+//!
+//! Note what is and is not streamed: the *layout* (streets, blocks, road graph)
+//! is generated once and kept whole, because it is only a few thousand
+//! rectangles and because traffic, pursuit and the minimap all need to query
+//! parts of the city the player cannot currently see. Only the *entities* —
+//! meshes and colliders — come and go with camera distance.
+
+use bevy::platform::collections::{HashMap, HashSet};
+use bevy::prelude::*;
+
+use super::City;
+use super::buildings::{ChunkOf, CityAssets, spawn_block};
+use crate::core::config::GameConfig;
+
+pub const CHUNK_SIZE: f32 = 250.0;
+
+/// Chunk containing a world-space XZ position.
+pub fn chunk_of(pos: Vec2) -> IVec2 {
+    IVec2::new(
+        (pos.x / CHUNK_SIZE).floor() as i32,
+        (pos.y / CHUNK_SIZE).floor() as i32,
+    )
+}
+
+pub fn chunk_center(chunk: IVec2) -> Vec2 {
+    Vec2::new(
+        (chunk.x as f32 + 0.5) * CHUNK_SIZE,
+        (chunk.y as f32 + 0.5) * CHUNK_SIZE,
+    )
+}
+
+/// Which blocks live in which chunk. Built once from the layout.
+#[derive(Resource, Default)]
+pub struct ChunkIndex {
+    blocks: HashMap<IVec2, Vec<usize>>,
+}
+
+impl ChunkIndex {
+    pub fn build(city: &City) -> Self {
+        let mut blocks: HashMap<IVec2, Vec<usize>> = HashMap::default();
+        for (i, block) in city.blocks.iter().enumerate() {
+            blocks
+                .entry(chunk_of(block.area.center()))
+                .or_default()
+                .push(i);
+        }
+        Self { blocks }
+    }
+
+    pub fn chunk_count(&self) -> usize {
+        self.blocks.len()
+    }
+
+    pub fn blocks_in(&self, chunk: IVec2) -> Option<&[usize]> {
+        self.blocks.get(&chunk).map(|v| v.as_slice())
+    }
+
+    /// Which chunks should be resident for a camera at `focus`.
+    ///
+    /// Split out from the spawn/despawn plumbing so the selection rule — the
+    /// part where an off-by-one silently strands entities or pops geometry in
+    /// the player's face — can be tested directly.
+    pub fn desired(&self, focus: Vec2, radius: f32) -> HashSet<IVec2> {
+        // Measured against chunk centres, padded by half a chunk diagonal so a
+        // chunk loads as soon as any corner of it comes into range.
+        let cutoff = radius + CHUNK_SIZE * std::f32::consts::SQRT_2 * 0.5;
+        self.blocks
+            .keys()
+            .copied()
+            .filter(|&c| chunk_center(c).distance(focus) <= cutoff)
+            .collect()
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct ActiveChunks(HashSet<IVec2>);
+
+impl ActiveChunks {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// Throttle: streaming does not need to run every frame, and doing so would
+/// scan every spawned entity 120 times a second for no benefit.
+#[derive(Resource)]
+pub struct StreamTimer(Timer);
+
+impl Default for StreamTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(0.25, TimerMode::Repeating))
+    }
+}
+
+pub fn update_streaming(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<GameConfig>,
+    city: Res<City>,
+    index: Res<ChunkIndex>,
+    assets: Res<CityAssets>,
+    mut active: ResMut<ActiveChunks>,
+    mut timer: ResMut<StreamTimer>,
+    cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
+    spawned: Query<(Entity, &ChunkOf)>,
+) {
+    if !timer.0.tick(time.delta()).just_finished() {
+        return;
+    }
+    let Ok(camera) = cameras.single() else { return };
+
+    let focus = camera.translation().xz();
+    let desired = index.desired(focus, config.world.stream_radius);
+
+    let arriving: Vec<IVec2> = desired.difference(&active.0).copied().collect();
+    for chunk in arriving {
+        if let Some(block_indices) = index.blocks_in(chunk) {
+            for &i in block_indices {
+                spawn_block(&mut commands, &assets, &city.blocks[i], chunk);
+            }
+        }
+    }
+
+    let leaving: HashSet<IVec2> = active.0.difference(&desired).copied().collect();
+    if !leaving.is_empty() {
+        for (entity, chunk) in &spawned {
+            if leaving.contains(&chunk.0) {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+
+    active.0 = desired;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::{City, citygen};
+
+    fn index() -> (City, ChunkIndex) {
+        let city = City(citygen::generate(0xA17E_5EED, 1000.0));
+        let index = ChunkIndex::build(&city);
+        (city, index)
+    }
+
+    #[test]
+    fn chunk_math_is_consistent() {
+        for pos in [
+            Vec2::new(0.0, 0.0),
+            Vec2::new(-513.0, 742.0),
+            Vec2::new(249.9, -0.1),
+        ] {
+            let c = chunk_of(pos);
+            let center = chunk_center(c);
+            assert!(
+                (center - pos).abs().max_element() <= CHUNK_SIZE,
+                "{pos:?} mapped to chunk {c:?} centred at {center:?}"
+            );
+            assert_eq!(chunk_of(center), c, "chunk centre must map back to itself");
+        }
+    }
+
+    #[test]
+    fn every_block_lands_in_a_chunk() {
+        let (city, index) = index();
+        let total: usize = index.blocks.values().map(|v| v.len()).sum();
+        assert_eq!(total, city.blocks.len(), "blocks lost during indexing");
+        assert!(index.chunk_count() > 10);
+    }
+
+    #[test]
+    fn distant_chunks_are_not_resident() {
+        let (_city, index) = index();
+        let near = index.desired(Vec2::ZERO, 400.0);
+        assert!(!near.is_empty(), "nothing loaded at the city centre");
+
+        // A chunk on the far edge must not be resident from the centre.
+        let far_corner = chunk_of(Vec2::new(950.0, 950.0));
+        assert!(
+            !near.contains(&far_corner),
+            "far corner should not be resident with a 400m radius"
+        );
+    }
+
+    #[test]
+    fn moving_away_evicts_the_old_neighbourhood() {
+        let (_city, index) = index();
+        let radius = 300.0;
+        let here = index.desired(Vec2::new(-800.0, -800.0), radius);
+        let there = index.desired(Vec2::new(800.0, 800.0), radius);
+
+        assert!(!here.is_empty() && !there.is_empty());
+        assert!(
+            here.is_disjoint(&there),
+            "opposite corners of a 2km city must share no resident chunks"
+        );
+    }
+
+    #[test]
+    fn residency_grows_monotonically_with_radius() {
+        let (_city, index) = index();
+        let focus = Vec2::new(120.0, -60.0);
+        let small = index.desired(focus, 300.0);
+        let large = index.desired(focus, 900.0);
+        assert!(
+            small.is_subset(&large),
+            "a larger radius must be a superset of a smaller one"
+        );
+        assert!(large.len() > small.len());
+    }
+}

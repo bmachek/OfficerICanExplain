@@ -1,0 +1,8 @@
+# Rust build artifacts (several GB)
+/target/
+
+# Quick saves
+/saves/
+
+# macOS
+.DS_Store

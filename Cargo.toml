@@ -1,0 +1,36 @@
+[package]
+name = "officer_i_can_explain"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "An original open-world crime sandbox"
+publish = false
+
+[features]
+default = []
+# Fast incremental iteration. Never enable for release builds.
+dev = ["bevy/dynamic_linking"]
+
+[dependencies]
+bevy = { version = "0.19", features = ["bevy_dev_tools"] }
+avian3d = "0.7"
+bevy-tnua = "0.32"
+bevy-tnua-avian3d = "0.12"
+leafwing-input-manager = "0.21"
+bevy_egui = "0.42"
+rand = "0.10"
+rand_chacha = "0.10"
+serde = { version = "1", features = ["derive"] }
+ron = "0.12"
+
+# Our own code: compile fast.
+[profile.dev]
+opt-level = 1
+
+# Dependencies (physics especially): run fast.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
