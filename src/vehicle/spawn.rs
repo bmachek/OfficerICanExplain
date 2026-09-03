@@ -185,6 +185,7 @@ pub fn spawn_vehicle(
         // the car collides as the box it always did, and the bodywork is free
         // to be any shape inside that.
         parent.spawn((
+            super::damage::BodyPanel,
             Mesh3d(body.shell.clone()),
             MeshMaterial3d(paint.clone()),
             Transform::IDENTITY,
@@ -192,6 +193,7 @@ pub fn spawn_vehicle(
         // The sill, in the same paint. Separate only so the shell above it can
         // arch over the wheels without the body pinching in half.
         parent.spawn((
+            super::damage::BodyPanel,
             Mesh3d(body.lower.clone()),
             MeshMaterial3d(paint.clone()),
             Transform::IDENTITY,

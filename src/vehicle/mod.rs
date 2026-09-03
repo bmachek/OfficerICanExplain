@@ -28,8 +28,14 @@ impl Plugin for VehiclePlugin {
                 Update,
                 (
                     damage::apply_crash_damage,
+                    // Between the impact and the explosion: a car that is
+                    // about to be wrecked should still take its last dent.
+                    damage::dent_bodywork,
+                    damage::scuff_paint,
                     damage::explode_wrecked_vehicles,
                     damage::fade_explosions,
+                    damage::smoke_from_dying_engines,
+                    damage::fade_smoke,
                 )
                     .chain()
                     .in_set(GameSet::Simulation),
@@ -48,6 +54,7 @@ fn setup_assets(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    commands.insert_resource(damage::SmokeAssets::new(&mut meshes));
     commands.insert_resource(spawn::build_assets(
         &mut meshes,
         &mut materials,

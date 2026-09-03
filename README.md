@@ -106,6 +106,7 @@ cargo run -- --screenshot shots/map.png    --follow --map
 | `--at x,y,z` / `--look x,y,z` | Camera pose |
 | `--at-node N` | Stand at road junction N, looking down the street |
 | `--at-car` | Frame the nearest parked car, three-quarters on |
+| `--damage F` | Beat that car up first, 0 to 1 |
 | `--eye H` | Eye height for `--at-node` |
 | `--follow` | Use the real third-person camera |
 | `--drive` | Take the nearest car and drive it (also logs telemetry) |
@@ -161,6 +162,17 @@ Wheels are surfaces of revolution with the tread and the spokes painted on and
 normal-mapped rather than modelled — geometry that fine is a blur above walking
 pace.
 
+Paint comes from a weighted palette: mostly white, silver, grey and black, with
+the occasional colour, because an evenly sampled rainbow reads as a toy box and
+it is the proportion of dull cars that makes the red one feel deliberate. Each
+colour carries its own flake content, and it goes on under a clearcoat.
+
+Crashes beat the metal in. The first real impact copies that car's panels off
+the archetype's shared mesh — everything else keeps batching — and pushes a
+dent into them along the direction the blow arrived from. The lacquer dulls, the
+flake stops reading, and past about a third gone the colour cooks off towards
+soot; below thirty percent it smokes.
+
 ## Audio
 
 There are no sound files either. `audio::synth` is a small DSP kit — partials,
@@ -189,5 +201,6 @@ pursuit, and everything but the player's own car is positioned in the world.
   tuning: the saloon reads rounder and more bulbous than it should, and there
   are no arches, because raising a lofted ring's floor raises it across the
   whole car rather than over one wheel.
-- No visible damage. Cars are wrecked, not deformed.
+- Damage does not change how a car collides: dents move metal, never the box
+  the physics uses. Rebuilding a convex hull per impact is the alternative.
 - There is one scanned set per surface, so a whole district paves identically.

@@ -64,6 +64,9 @@ pub struct CaptureRequest {
     /// the pavement a car is a silhouette, and from behind the wheels are
     /// hidden by its own bumper. Judging a body change needs this view.
     pub at_car: bool,
+    /// Beats the framed car up by this fraction before shooting it, so damage
+    /// can be judged without driving into a wall at the right angle first.
+    pub damage: f32,
     /// Puts the player in the nearest car and holds the throttle down.
     /// An end-to-end smoke test of enter -> drive -> chase camera that needs
     /// nobody at the keyboard.
@@ -122,6 +125,9 @@ pub fn parse_args() -> Option<CaptureRequest> {
             .unwrap_or(1.7),
         hour: value_of("--hour").and_then(|v| v.parse().ok()),
         at_car: args.iter().any(|a| a == "--at-car"),
+        damage: value_of("--damage")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0),
         follow: args.iter().any(|a| a == "--follow"),
         drive: args.iter().any(|a| a == "--drive"),
         map: args.iter().any(|a| a == "--map"),
@@ -420,23 +426,51 @@ fn autodrive(
 fn pose_at_car(
     request: Res<CaptureRequest>,
     mut done: Local<bool>,
-    vehicles: Query<&Transform, (With<Vehicle>, Without<CameraRig>)>,
+    mut impacts: MessageWriter<crate::vehicle::damage::VehicleImpact>,
+    mut vehicles: Query<
+        (
+            Entity,
+            &Transform,
+            &mut crate::vehicle::damage::VehicleHealth,
+        ),
+        (With<Vehicle>, Without<CameraRig>),
+    >,
     mut cameras: Query<(&mut Transform, &mut CameraRig)>,
 ) {
     if *done || !request.at_car {
         return;
     }
-    let Some(car) = vehicles
+    let nearest = vehicles
         .iter()
         .min_by(|a, b| {
-            a.translation
+            a.1.translation
                 .length_squared()
-                .total_cmp(&b.translation.length_squared())
+                .total_cmp(&b.1.translation.length_squared())
         })
-        .copied()
-    else {
+        .map(|(entity, transform, _)| (entity, *transform));
+    let Some((entity, car)) = nearest else {
         return;
     };
+
+    if request.damage > 0.0
+        && let Ok((_, _, mut health)) = vehicles.get_mut(entity)
+    {
+        health.current = health.max * (1.0 - request.damage).max(0.01);
+        // Three blows from three sides, so the shot shows a car that has been
+        // in a fight rather than one pressed neatly on the nose.
+        for from in [
+            Vec3::new(-0.2, 0.1, -1.0).normalize(),
+            Vec3::new(1.0, 0.15, 0.3).normalize(),
+            Vec3::new(-0.7, 0.0, 0.7).normalize(),
+        ] {
+            impacts.write(crate::vehicle::damage::VehicleImpact {
+                vehicle: entity,
+                position: car.translation,
+                from,
+                severity: 18.0 * request.damage,
+            });
+        }
+    }
 
     // Off the front three-quarter, at about eye height for someone standing
     // beside it: the angle every car photograph is taken from, because it shows
