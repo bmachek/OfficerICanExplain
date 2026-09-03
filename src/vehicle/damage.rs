@@ -56,6 +56,18 @@ impl VehicleHealth {
 #[derive(Component, Default)]
 pub struct PreviousVelocity(pub Vec3);
 
+/// Fired for every impact hard enough to do damage.
+///
+/// Separate from [`VehicleDestroyed`] because most crashes are survivable, and
+/// a crash the player walks away from still has to be heard.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct VehicleImpact {
+    pub position: Vec3,
+    /// Velocity lost in the impact, in m/s. A scrape is a couple; hitting a
+    /// wall at speed is twenty.
+    pub severity: f32,
+}
+
 /// Fired when a vehicle is destroyed. M5's wanted system listens to this.
 #[derive(Message, Debug, Clone, Copy)]
 pub struct VehicleDestroyed {
@@ -70,17 +82,19 @@ pub struct Explosion {
 }
 
 pub fn apply_crash_damage(
+    mut impacts: MessageWriter<VehicleImpact>,
     mut vehicles: Query<
         (
             &LinearVelocity,
             &mut PreviousVelocity,
             &mut VehicleHealth,
             &VehicleState,
+            &Transform,
         ),
         (With<Vehicle>, With<ActiveVehicle>),
     >,
 ) {
-    for (velocity, mut previous, mut health, state) in &mut vehicles {
+    for (velocity, mut previous, mut health, state, transform) in &mut vehicles {
         let delta = (velocity.0 - previous.0).length();
         previous.0 = velocity.0;
 
@@ -91,6 +105,10 @@ pub fn apply_crash_damage(
         // meaningless, and airborne landings on all four wheels.
         if delta > IMPACT_THRESHOLD && state.grounded_wheels() > 0 {
             health.current -= (delta - IMPACT_THRESHOLD) * DAMAGE_PER_IMPACT;
+            impacts.write(VehicleImpact {
+                position: transform.translation,
+                severity: delta - IMPACT_THRESHOLD,
+            });
         }
     }
 }

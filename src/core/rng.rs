@@ -19,6 +19,9 @@ pub mod stream {
     pub const PROPS: u64 = 4;
     pub const VEHICLE_SPAWNS: u64 = 5;
     pub const PEDESTRIANS: u64 = 6;
+    /// Waveform synthesis. Not world state, but the same reproducibility
+    /// argument applies: a sound should not change between runs.
+    pub const AUDIO: u64 = 7;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

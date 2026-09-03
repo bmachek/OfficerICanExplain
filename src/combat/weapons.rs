@@ -90,14 +90,27 @@ impl Weapon {
 #[derive(Component)]
 pub struct Tracer(pub Timer);
 
+/// Raised on every shot, hit or miss.
+///
+/// `Gunfire` is already reported as a crime, but a crime is about consequence
+/// and this is about the event: which weapon, where the muzzle was. Audio needs
+/// both, and folding them together would mean a silenced weapon could not exist.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct WeaponFired {
+    pub kind: WeaponKind,
+    pub position: Vec3,
+}
+
 pub struct WeaponsPlugin;
 
 impl Plugin for WeaponsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<Died>().add_systems(
-            Update,
-            (fire_weapons, fade_tracers).in_set(GameSet::Simulation),
-        );
+        app.add_message::<Died>()
+            .add_message::<WeaponFired>()
+            .add_systems(
+                Update,
+                (fire_weapons, fade_tracers).in_set(GameSet::Simulation),
+            );
     }
 }
 
@@ -109,6 +122,7 @@ fn fire_weapons(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut crimes: MessageWriter<CrimeReported>,
     mut deaths: MessageWriter<Died>,
+    mut shots: MessageWriter<WeaponFired>,
     cameras: Query<(&GlobalTransform, &CameraRig)>,
     mut shooters: Query<(Entity, &ActionState<Action>, &mut Weapon), With<Player>>,
     mut targets: Query<(&mut Health, &GlobalTransform)>,
@@ -157,6 +171,10 @@ fn fire_weapons(
     }
 
     spawn_tracer(&mut commands, &mut meshes, &mut materials, origin, endpoint);
+    shots.write(WeaponFired {
+        kind: weapon.kind,
+        position: origin,
+    });
 
     // Gunfire is its own crime, hit or miss.
     crimes.write(CrimeReported {

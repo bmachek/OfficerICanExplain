@@ -1,5 +1,6 @@
 //! Cross-cutting foundations: states, schedule structure, tunables, determinism.
 
+pub mod assets;
 pub mod capture;
 pub mod config;
 pub mod rng;

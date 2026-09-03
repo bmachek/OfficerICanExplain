@@ -2,6 +2,7 @@
 
 pub mod controller;
 pub mod damage;
+pub mod lights;
 pub mod spawn;
 pub mod spec;
 
@@ -13,7 +14,9 @@ pub struct VehiclePlugin;
 
 impl Plugin for VehiclePlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<damage::VehicleDestroyed>()
+        app.add_plugins(lights::VehicleLightsPlugin)
+            .add_message::<damage::VehicleDestroyed>()
+            .add_message::<damage::VehicleImpact>()
             .add_systems(Startup, setup_assets)
             .add_systems(PostStartup, spawn::spawn_parked_vehicles)
             // Forces must be applied before Avian steps in `FixedPostUpdate`,
@@ -42,6 +45,6 @@ fn setup_assets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let assets = spawn::build_assets(&mut meshes, &mut materials);
-    commands.insert_resource(assets);
+    commands.insert_resource(spawn::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(lights::build_assets(&mut meshes, &mut materials));
 }

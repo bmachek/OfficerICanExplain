@@ -53,6 +53,14 @@ pub struct VehicleState {
     pub forward_speed: f32,
     /// Accumulated wheel rotation, for spinning the wheel meshes.
     pub wheel_spin: f32,
+    /// Sideways speed the tyres failed to cancel this tick, in m/s.
+    ///
+    /// Zero whenever the car has grip: the lateral force is exactly the one
+    /// that would kill the slip outright. It only becomes non-zero once a wheel
+    /// asks for more than its friction budget, which is precisely the moment
+    /// the tyre is sliding rather than rolling — so this is both the physical
+    /// residual and the cue the audio uses to decide a tyre is squealing.
+    pub slip: f32,
 }
 
 impl VehicleState {
@@ -136,6 +144,7 @@ pub fn drive_vehicles(
 
         if state.grounded_wheels() == 0 {
             // Airborne: no tyres, no drag from the road. Let it fly.
+            state.slip = 0.0;
             continue;
         }
 
@@ -145,6 +154,7 @@ pub fn drive_vehicles(
         let forward_speed = state.forward_speed;
         let mass_share = spec.wheel_mass_share();
 
+        let mut slip: f32 = 0.0;
         for (index, (wheel, &contact)) in state.wheels.iter().zip(contacts.iter()).enumerate() {
             if !wheel.grounded {
                 continue;
@@ -157,7 +167,11 @@ pub fn drive_vehicles(
 
             // Force that would cancel sideways slip outright this tick, then
             // clipped to what the tyre can actually hold.
-            let lateral = (-lateral_speed * mass_share / dt).clamp(-budget, budget);
+            let wanted = -lateral_speed * mass_share / dt;
+            let lateral = wanted.clamp(-budget, budget);
+            // Whatever the clamp threw away, back in units of speed: how fast
+            // this wheel is still sliding after the tyre has done its best.
+            slip = slip.max((wanted.abs() - budget).max(0.0) * dt / mass_share);
             let longitudinal = longitudinal_force(
                 spec,
                 input,
@@ -187,6 +201,7 @@ pub fn drive_vehicles(
         forces.apply_force(-up * spec.downforce * speed * speed);
 
         state.wheel_spin += state.forward_speed / spec.wheel_radius * dt;
+        state.slip = slip;
     }
 }
 
@@ -510,6 +525,52 @@ mod tests {
         );
         step(app, 90);
         slip_angle(app, car)
+    }
+
+    /// Peak reported slip while cornering, which is what the tyre audio reads.
+    fn peak_slip(app: &mut App, car: Entity, handbrake: bool) -> f32 {
+        step(app, 200);
+        set_input(
+            app,
+            car,
+            VehicleInput {
+                throttle: 1.0,
+                ..default()
+            },
+        );
+        step(app, 260);
+        set_input(
+            app,
+            car,
+            VehicleInput {
+                throttle: 1.0,
+                steer: 1.0,
+                handbrake,
+            },
+        );
+        let mut peak = 0.0f32;
+        for _ in 0..90 {
+            step(app, 1);
+            peak = peak.max(app.world().get::<VehicleState>(car).unwrap().slip);
+        }
+        peak
+    }
+
+    #[test]
+    fn reported_slip_tracks_whether_the_tyres_are_actually_sliding() {
+        let (mut app, car, _) = harness(VehicleClass::Sedan, 1.5);
+        // Straight and level, the lateral force cancels slip outright.
+        step(&mut app, 200);
+        assert_eq!(app.world().get::<VehicleState>(car).unwrap().slip, 0.0);
+
+        let gripping = peak_slip(&mut app, car, false);
+        let (mut app, car, _) = harness(VehicleClass::Sedan, 1.5);
+        let sliding = peak_slip(&mut app, car, true);
+
+        assert!(
+            sliding > gripping,
+            "the handbrake should report more slip: {gripping:.3} vs {sliding:.3} m/s"
+        );
     }
 
     #[test]

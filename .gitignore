@@ -6,3 +6,6 @@
 
 # macOS
 .DS_Store
+
+# Scanned PBR materials, fetched by tools/fetch-materials.sh (~143 MB)
+/assets/materials/

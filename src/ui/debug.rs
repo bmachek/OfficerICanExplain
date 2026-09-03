@@ -67,6 +67,12 @@ fn tuning_panel(
             );
 
             ui.separator();
+            ui.label(egui::RichText::new("mixer").strong());
+            ui.add(egui::Slider::new(&mut config.audio.master, 0.0..=1.0).text("master"));
+            ui.add(egui::Slider::new(&mut config.audio.effects, 0.0..=1.5).text("effects"));
+            ui.add(egui::Slider::new(&mut config.audio.ambience, 0.0..=1.5).text("ambience"));
+
+            ui.separator();
             ui.label(egui::RichText::new("input").strong());
             if let Ok(action_state) = actions.single() {
                 let movement = action_state.clamped_axis_pair(&Action::Move);

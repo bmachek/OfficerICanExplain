@@ -2,12 +2,15 @@
 
 pub mod buildings;
 pub mod citygen;
+pub mod material;
 pub mod roadgraph;
 pub mod streaming;
 pub mod streetlights;
+pub mod texture;
 pub mod timeofday;
 
 use avian3d::prelude::*;
+use bevy::math::Affine2;
 use bevy::prelude::*;
 
 use crate::core::config::GameConfig;
@@ -22,6 +25,7 @@ impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             PhysicsPlugins::default(),
+            material::MaterialLibraryPlugin,
             timeofday::TimeOfDayPlugin,
             streetlights::StreetLightPlugin,
         ))
@@ -37,6 +41,8 @@ fn generate_city(
     config: Res<GameConfig>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    library: Res<material::MaterialLibrary>,
 ) {
     let started = std::time::Instant::now();
     let layout = citygen::generate(config.world_seed, config.world.half_extent);
@@ -53,32 +59,90 @@ fn generate_city(
     let city = City(layout);
     commands.insert_resource(streaming::ChunkIndex::build(&city));
     commands.insert_resource(city);
-    commands.insert_resource(buildings::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(buildings::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+        &library,
+    ));
 }
+
+/// Metres of road covered by one repeat of the asphalt texture.
+///
+/// The scanned set is photographed at roughly two metres across. Tiling it at
+/// its true size makes the repeat obvious on a long straight, so it is stretched
+/// somewhat — the trade is between visible repetition and visible blur, and at
+/// the angle a road is actually seen from, blur loses.
+const ASPHALT_TILE: f32 = 6.0;
+
+/// How wide the road surface is drawn, in metres. Far beyond the streamed city
+/// on purpose — see `setup_ground`.
+const GROUND_VIEW_EXTENT: f32 = 40_000.0;
 
 /// The road surface. Streets are not meshed individually: the ground *is* the
 /// asphalt, and the raised pavement slabs on each block carve the street grid
 /// out of it as negative space. One quad instead of thousands of road polys.
+///
+/// That one quad is two kilometres across, so the asphalt tiles a few hundred
+/// times over it. Everything that makes that survivable — a texture that wraps,
+/// a mip chain, anisotropic filtering — lives in `texture`.
 fn setup_ground(
     mut commands: Commands,
     config: Res<GameConfig>,
+    library: Res<material::MaterialLibrary>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    let size = config.world.half_extent * 2.0 + 200.0;
+    // The visible plane runs far past the city, so that from a rooftop the
+    // world does not end in a rectangle hanging in mid-air; the atmosphere
+    // hazes the surplus into the horizon within a couple of kilometres. It
+    // costs one more quad. The collider only needs to cover the city.
+    let played = config.world.half_extent * 2.0 + 200.0;
+    let size = GROUND_VIEW_EXTENT;
     commands.spawn((
         Name::new("Road surface"),
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(size, size))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.16, 0.16, 0.175),
-            perceptual_roughness: 0.98,
-            ..default()
-        })),
+        Mesh3d(meshes.add(buildings::with_tangents(
+            Plane3d::default().mesh().size(size, size).build(),
+        ))),
+        MeshMaterial3d(materials.add(road_material(&library, images.as_mut(), size))),
     ));
     commands.spawn((
         Name::new("Ground collider"),
         RigidBody::Static,
-        Collider::cuboid(size, 2.0, size),
+        Collider::cuboid(played, 2.0, played),
         Transform::from_xyz(0.0, -1.0, 0.0),
     ));
+}
+
+/// The asphalt, scanned if it was downloaded and painted if it was not.
+fn road_material(
+    library: &material::MaterialLibrary,
+    images: &mut Assets<Image>,
+    size: f32,
+) -> StandardMaterial {
+    let mut asphalt = StandardMaterial {
+        uv_transform: Affine2::from_scale(Vec2::splat(size / ASPHALT_TILE)),
+        ..default()
+    };
+
+    match library.get(material::set::ROAD) {
+        Some(scanned) => {
+            scanned.apply(&mut asphalt);
+            // The scan is a bright, freshly-laid surface photographed in
+            // daylight; dropped into a street canyon it reads as concrete. The
+            // tint is the one liberty taken with it, and only in value.
+            asphalt.base_color = Color::srgb(0.50, 0.50, 0.52);
+        }
+        None => {
+            // Real asphalt sits near 0.08 linear. Much under that looks like
+            // tarmac at midday and like a hole in the world under a street
+            // lamp: too little comes back to show a pool at all.
+            asphalt.base_color = Color::srgb(0.31, 0.31, 0.325);
+            asphalt.base_color_texture = Some(images.add(texture::asphalt()));
+            asphalt.normal_map_texture = Some(images.add(texture::asphalt_normal()));
+            asphalt.perceptual_roughness = 0.96;
+        }
+    }
+    asphalt
 }

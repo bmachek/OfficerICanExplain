@@ -32,9 +32,9 @@ pub enum PlayerScheme {
 #[derive(Component)]
 pub struct Player;
 
-const CAPSULE_RADIUS: f32 = 0.38;
+pub const CAPSULE_RADIUS: f32 = 0.38;
 /// Length of the cylindrical section; total height is this plus two radii.
-const CAPSULE_LENGTH: f32 = 1.05;
+pub const CAPSULE_LENGTH: f32 = 1.05;
 /// Must exceed the distance from the capsule's centre to its lowest point
 /// (`CAPSULE_LENGTH / 2 + CAPSULE_RADIUS`), or the controller fights the floor.
 const FLOAT_HEIGHT: f32 = 1.0;

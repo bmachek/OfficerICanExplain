@@ -102,7 +102,7 @@ fn spawn_pool(
             PointLight {
                 color: LAMP_COLOR,
                 intensity: 0.0,
-                range: 46.0,
+                range: 62.0,
                 shadow_maps_enabled: false,
                 ..default()
             },
@@ -160,11 +160,15 @@ fn set_lamp_brightness(
 ) {
     // Lamps come up through dusk and go out through dawn.
     let night = 1.0 - daylight(clock.hours);
-    let intensity = 420_000.0 * night;
+    // Quoted so a lamp lays down a pool the road actually reads at the night
+    // exposure — see `render::adapt_exposure`. Physically this is a floodlight rather
+    // than a street lamp, which is the usual bargain: real sodium lamps look
+    // like nothing at all once the camera has opened up for a moonlit sky.
+    let intensity = 1_250_000.0 * night;
     for mut lamp in &mut lamps {
         lamp.intensity = intensity;
     }
     if let Some(mut material) = materials.get_mut(&glass.0) {
-        material.emissive = LinearRgba::rgb(6.0 * night, 4.4 * night, 2.4 * night);
+        material.emissive = LinearRgba::rgb(13.0 * night, 9.4 * night, 5.0 * night);
     }
 }

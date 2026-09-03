@@ -3,8 +3,10 @@
 An original open-world crime sandbox, built in Rust with Bevy.
 
 An original work, not affiliated with anyone: the city, vehicles, pedestrians
-and police are all generated procedurally at runtime, and no third-party
-assets, trademarks or IP are used.
+and police are all generated procedurally at runtime, and no trademarks or
+third-party IP are used. The sound is synthesised at startup from a seed. The
+surface materials are scanned PBR sets under CC0 — public domain — fetched by a
+script and never checked in.
 
 ![The city from above](shots/m1-aerial.png)
 
@@ -20,10 +22,15 @@ generator; nothing here is authored by hand.
 ## Running
 
 ```sh
+tools/fetch-materials.sh  # ~131 MB of CC0 textures; optional, see below
 cargo run                 # first build takes a few minutes; then ~2-10s
 cargo run --release       # smoother, slower to compile
 cargo run --features dev  # dynamic linking, fastest iteration
 ```
+
+The material download is optional. Without it every surface falls back to the
+procedural texture it shipped with, and the game runs exactly the same — it
+just looks worse. Nothing is checked in and nothing is required to build.
 
 ## Controls
 
@@ -65,6 +72,8 @@ following and start ramming.
 | `mission` | Objective state machine, mission chain, money |
 | `ui` | HUD, minimap, dev tuning panel |
 | `save` | RON quick save / load |
+| `render` | Atmosphere, exposure, bloom, ambient occlusion, anti-aliasing |
+| `audio` | Sound synthesis, the sound bank, and what triggers what |
 
 The world is fully reproducible from `GameConfig::world_seed`, so a save stores
 only what cannot be derived: position, money, health, heat and mission progress.
@@ -104,9 +113,59 @@ cargo run -- --screenshot shots/map.png    --follow --map
 | `--stream-radius M` | Load more of the city than a player would |
 | `--frames N` | Frames to render before capturing |
 
+## Textures
+
+Surfaces come from photogrammetry: `tools/fetch-materials.sh` pulls six scanned
+PBR sets from [ambientCG](https://ambientcg.com), all released under CC0, into
+`assets/materials/`. `world::material` loads them — colour through sRGB, the
+rest linear — builds each one a mip chain on the CPU, because Bevy has no
+runtime mip generator and a 2K texture tiled across a road without one does not
+shimmer so much as boil, and hands them a tiling anisotropic sampler.
+
+Anything missing falls back. Every lookup returns an `Option` and the caller
+paints its own; a fresh clone with no download still starts.
+
+Structure stays procedural, because no scan can supply it. Every material is
+painted into an `Image` at startup by `world::texture` —
+value noise, fBm and ridged noise, plus a few deliberate shapes. Facades are
+the interesting case: the window grid is drawn per building class (house,
+low-rise, mid-rise, tower) so a tower gets curtain-wall glazing and a house
+gets four panes and a door, rather than one texture stretched over both.
+
+Each facade produces four maps from one pass — colour, a metallic-roughness
+pack so the glass is glossy and the wall is not, a tangent-space normal map so
+the panes are genuinely recessed, and an emissive mask marking which windows
+are lit. `timeofday` ramps the emissive strength, which is why the city fills
+with light at dusk without a single extra light source.
+
+Facades are still painted rather than scanned. A scan cannot be stretched over
+a whole tower face without smearing, and tiling it per storey would repeat the
+lit-window pattern with it — which is the one thing that must not repeat. Doing
+both needs a material with a second, independent detail UV.
+
+## Audio
+
+There are no sound files either. `audio::synth` is a small DSP kit — partials,
+noise, one-pole filters, resonators, envelopes — and `audio::bank` writes every
+sound in the game as an expression in it: a gunshot is a crack plus a muzzle
+blast plus the street answering back. The buffers are computed once at startup
+and played through a custom Bevy audio source.
+
+Loops are built to be seamless by construction rather than by crossfading: the
+engine and the ambience are sums of harmonics of the loop frequency, so the
+waveform is exactly periodic, and the siren's sweep is tuned so its accumulated
+phase closes at the loop point.
+
+Engine pitch follows the drivetrain, sirens and beacons come on with the
+pursuit, and everything but the player's own car is positioned in the world.
+
 ## Known limitations
 
 - Pedestrians cross roads wherever their route turns, rather than at crossings.
 - Traffic has no right-of-way rules at junctions; it brakes for obstacles only.
 - Vehicle damage is not visually modelled — cars are wrecked, not deformed.
-- No audio yet.
+- Roads have no markings: no lane lines, no crossings, no junction paint.
+- Facades are procedural, so walls read as materials rather than photographs.
+  Scanning them needs a custom material with a detail UV; see above.
+- Vehicles are boxes. No panel shapes, no wheel detail, no visible damage.
+- There is one scanned set per surface, so a whole district paves identically.
