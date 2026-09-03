@@ -17,7 +17,7 @@ generator; nothing here is authored by hand.
 | | |
 |---|---|
 | ![Street level](shots/m1-street.png) | ![Night](shots/m1-night.png) |
-| ![Driving](shots/m3-driving.png) | ![HUD and minimap](shots/m6-hud.png) |
+| ![Driving](shots/m3-driving.png) | ![Bodywork](shots/m3-cars.png) |
 
 ## Running
 
