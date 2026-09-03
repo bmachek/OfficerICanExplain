@@ -441,7 +441,9 @@ fn pose_at_car(
     // Off the front three-quarter, at about eye height for someone standing
     // beside it: the angle every car photograph is taken from, because it shows
     // the nose, one flank and both wheels on that side at once.
-    let eye = car.transform_point(Vec3::new(3.4, 1.15, -4.2));
+    // Far enough out that the lens is not adding drama of its own: from three
+    // metres a nose fills the frame and every proportion is a lie.
+    let eye = car.transform_point(Vec3::new(5.2, 1.75, -6.8));
     let target = car.translation + Vec3::Y * 0.35;
 
     for (mut transform, mut rig) in &mut cameras {

@@ -96,6 +96,10 @@ pub struct VehicleSpec {
     pub roll_couple: f32,
 
     pub body_color: Color,
+    /// How much of the paint is flake rather than pigment. 0 is a solid
+    /// colour, 1 a full metallic. Distinct from the clearcoat, which every car
+    /// has: this is what is *under* the lacquer.
+    pub body_metallic: f32,
 }
 
 impl VehicleSpec {
@@ -155,6 +159,7 @@ impl VehicleSpec {
             handbrake_grip: 0.22,
             roll_couple: 0.30,
             body_color: Color::srgb(0.72, 0.24, 0.22),
+            body_metallic: 0.35,
         }
     }
 
@@ -187,6 +192,7 @@ impl VehicleSpec {
             handbrake_grip: 0.18,
             roll_couple: 0.22,
             body_color: Color::srgb(0.90, 0.72, 0.16),
+            body_metallic: 0.35,
         }
     }
 
@@ -219,6 +225,7 @@ impl VehicleSpec {
             handbrake_grip: 0.30,
             roll_couple: 0.45,
             body_color: Color::srgb(0.35, 0.42, 0.52),
+            body_metallic: 0.35,
         }
     }
 
@@ -233,6 +240,8 @@ impl VehicleSpec {
             // Readable at a glance in shadow; near-black cruisers vanished
             // against the asphalt exactly when you needed to spot them.
             body_color: Color::srgb(0.13, 0.26, 0.62),
+            // Fleet paint, not a showroom finish.
+            body_metallic: 0.10,
             ..Self::sedan()
         }
     }

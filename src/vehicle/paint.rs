@@ -12,10 +12,47 @@
 
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
+use rand::RngExt;
+use rand_chacha::ChaCha8Rng;
 
 use crate::world::texture::{byte, fbm, hash01, normal_map, painted, smoothstep01};
 
 const WHEEL_SIZE: u32 = 256;
+
+/// What the traffic is painted.
+///
+/// Weighted the way a real street is: mostly white, silver, grey and black,
+/// with the occasional colour. An evenly sampled rainbow of cars reads as a toy
+/// box, and it is the *proportion* of dull ones that makes the red one feel
+/// like a choice somebody made.
+const PALETTE: [(Color, f32, u32); 12] = [
+    (Color::srgb(0.86, 0.87, 0.88), 0.15, 5), // white
+    (Color::srgb(0.62, 0.64, 0.67), 0.75, 5), // silver
+    (Color::srgb(0.30, 0.32, 0.35), 0.60, 4), // gunmetal
+    (Color::srgb(0.07, 0.07, 0.08), 0.30, 4), // black
+    (Color::srgb(0.44, 0.13, 0.13), 0.55, 2), // maroon
+    (Color::srgb(0.72, 0.18, 0.15), 0.35, 2), // red
+    (Color::srgb(0.13, 0.26, 0.42), 0.65, 2), // navy
+    (Color::srgb(0.20, 0.40, 0.34), 0.60, 1), // British racing green
+    (Color::srgb(0.78, 0.62, 0.20), 0.50, 1), // ochre
+    (Color::srgb(0.55, 0.42, 0.32), 0.30, 1), // beige
+    (Color::srgb(0.24, 0.44, 0.62), 0.55, 1), // pale blue
+    (Color::srgb(0.86, 0.44, 0.12), 0.45, 1), // orange
+];
+
+/// Picks a colour and finish for one car off the street.
+pub fn street_paint(rng: &mut ChaCha8Rng) -> (Color, f32) {
+    let total: u32 = PALETTE.iter().map(|(_, _, weight)| weight).sum();
+    let mut ticket = rng.random_range(0..total);
+    for (color, metallic, weight) in PALETTE {
+        if ticket < weight {
+            return (color, metallic);
+        }
+        ticket -= weight;
+    }
+    let (color, metallic, _) = PALETTE[0];
+    (color, metallic)
+}
 
 /// Spokes on a wheel face. Also the number of tread blocks across a tyre.
 const SPOKES: u32 = 5;
@@ -127,6 +164,43 @@ pub fn tyre_normal() -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::rng::{stream, stream_for};
+
+    #[test]
+    fn the_palette_is_weighted_towards_dull_colours() {
+        let mut rng = stream_for(9, stream::VEHICLE_SPAWNS);
+        let mut plain = 0;
+        for _ in 0..600 {
+            let (color, _) = street_paint(&mut rng);
+            // Measured in sRGB, not linear: the linear curve stretches the
+            // gap between a silver's channels far more than it stretches a
+            // black's, so one threshold cannot cover both.
+            let c = color.to_srgba();
+            let channels = [c.red, c.green, c.blue];
+            let max = channels.iter().cloned().fold(f32::MIN, f32::max);
+            let min = channels.iter().cloned().fold(f32::MAX, f32::min);
+            if max - min < 0.06 {
+                plain += 1;
+            }
+        }
+        assert!(
+            (330..=430).contains(&plain),
+            "expected roughly two thirds neutral cars, got {plain} of 600"
+        );
+    }
+
+    #[test]
+    fn every_ticket_in_the_palette_draws_something() {
+        // An off-by-one in the weighted pick silently makes the last colour
+        // unreachable, which is invisible until somebody counts.
+        let mut seen = std::collections::HashSet::new();
+        let mut rng = stream_for(3, stream::VEHICLE_SPAWNS);
+        for _ in 0..4000 {
+            let (color, _) = street_paint(&mut rng);
+            seen.insert(format!("{:?}", color.to_srgba()));
+        }
+        assert_eq!(seen.len(), PALETTE.len(), "some colour never comes up");
+    }
 
     #[test]
     fn spokes_alternate_with_gaps_around_the_wheel() {

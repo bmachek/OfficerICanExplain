@@ -40,9 +40,10 @@ pub struct AlwaysSimulated;
 #[derive(Component)]
 pub struct WheelVisual(pub usize);
 
-/// The shell and greenhouse for one archetype.
-struct BodyMeshes {
+/// The three lofts for one archetype, as loaded meshes.
+struct BodyHandles {
     shell: Handle<Mesh>,
+    lower: Handle<Mesh>,
     cabin: Option<Handle<Mesh>>,
 }
 
@@ -50,7 +51,7 @@ struct BodyMeshes {
 pub struct VehicleAssets {
     /// One entry per archetype, built once and shared by every car of that
     /// kind — which is also what lets Bevy batch a street full of them.
-    bodies: Vec<(VehicleClass, BodyMeshes)>,
+    bodies: Vec<(VehicleClass, BodyHandles)>,
     tyre_mesh: Handle<Mesh>,
     rim_mesh: Handle<Mesh>,
     tyre: Handle<StandardMaterial>,
@@ -59,7 +60,7 @@ pub struct VehicleAssets {
 }
 
 impl VehicleAssets {
-    fn body(&self, class: VehicleClass) -> &BodyMeshes {
+    fn body(&self, class: VehicleClass) -> &BodyHandles {
         self.bodies
             .iter()
             .find(|(c, _)| *c == class)
@@ -84,14 +85,16 @@ pub fn build_assets(
     ]
     .into_iter()
     .map(|class| {
-        let (shell, cabin) = super::body::build(class, &class.spec());
+        let built = super::body::build(class, &class.spec());
+        // Normal maps need a tangent basis, and mikktspace is the one the
+        // shader agrees with.
+        let mut add = |mesh| meshes.add(crate::world::buildings::with_tangents(mesh));
         (
             class,
-            BodyMeshes {
-                // Normal maps need a tangent basis, and mikktspace is the one
-                // the shader agrees with.
-                shell: meshes.add(crate::world::buildings::with_tangents(shell)),
-                cabin: cabin.map(|mesh| meshes.add(crate::world::buildings::with_tangents(mesh))),
+            BodyHandles {
+                shell: add(built.shell),
+                lower: add(built.lower),
+                cabin: built.cabin.map(&mut add),
             },
         )
     })
@@ -143,8 +146,11 @@ pub fn spawn_vehicle(
     // panel instead of tinting itself the colour of the car.
     let paint = materials.add(StandardMaterial {
         base_color: spec.body_color,
-        perceptual_roughness: 0.38,
-        metallic: 0.10,
+        // Flake in the basecoat, then lacquer over the top. Metallic paint is
+        // rougher underneath than solid paint and reads duller for it, which is
+        // why the roughness moves with the flake rather than staying put.
+        perceptual_roughness: 0.30 + spec.body_metallic * 0.22,
+        metallic: spec.body_metallic,
         clearcoat: 1.0,
         clearcoat_perceptual_roughness: 0.08,
         ..default()
@@ -180,6 +186,13 @@ pub fn spawn_vehicle(
         // to be any shape inside that.
         parent.spawn((
             Mesh3d(body.shell.clone()),
+            MeshMaterial3d(paint.clone()),
+            Transform::IDENTITY,
+        ));
+        // The sill, in the same paint. Separate only so the shell above it can
+        // arch over the wheels without the body pinching in half.
+        parent.spawn((
+            Mesh3d(body.lower.clone()),
             MeshMaterial3d(paint.clone()),
             Transform::IDENTITY,
         ));
@@ -348,7 +361,8 @@ pub fn spawn_parked_vehicles(
         let position = a + *direction * (edge.length * along) + normal * offset * side;
 
         let class = VehicleClass::CIVILIAN[rng.random_range(0..VehicleClass::CIVILIAN.len())];
-        let spec = class.spec();
+        let mut spec = class.spec();
+        (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
         // Nose along the street, facing the way traffic on that side runs.
         let facing = if side > 0.0 { *direction } else { -*direction };
         let heading = heading_towards(facing);
@@ -372,7 +386,8 @@ pub fn spawn_parked_vehicles(
             return;
         };
 
-        let spec = VehicleClass::Sedan.spec();
+        let mut spec = VehicleClass::Sedan.spec();
+        (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
         let heading = heading_towards(*direction);
         // On the carriageway, a little down the street from the junction.
         let normal = Vec2::new(-direction.y, direction.x);

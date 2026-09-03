@@ -60,9 +60,21 @@ impl Section {
 }
 
 /// Everything needed to build one vehicle's visible shell.
+///
+/// Three lofts, and the middle one is what makes wheel arches possible at all.
+/// A single ring cannot have an arch cut into it — raising its floor over an
+/// axle raises it right across the car, and pushed far enough the body pinches
+/// in half. So the body is split by height instead: the `shell` is the full
+/// width and arches *up* over each axle, and the `lower` sill runs the length
+/// underneath it at four-fifths of the width. The wheel then sits outboard of
+/// the sill and under the shell's arch, which is exactly where a wheel goes.
 pub struct BodyProfile {
-    /// The lower body: nose to tail, full width.
+    /// The upper body: full width, arching over each axle.
     pub shell: Vec<Section>,
+    /// The sill and valances: narrower, running the length below the shell,
+    /// and pinched almost to nothing at each axle so it does not simply fill
+    /// the arch back in.
+    pub lower: Vec<Section>,
     /// The greenhouse, narrower and set into the shell. Empty for a bare cab.
     pub cabin: Vec<Section>,
 }
@@ -244,40 +256,54 @@ pub fn rim_mesh(width: f32) -> Mesh {
     )
 }
 
-/// The shell and greenhouse for one archetype.
+/// The three lofts for one archetype.
 ///
-/// Wheel arches are cut by lifting `bottom` over each axle. They need three or
-/// four sections each rather than one: a single raised section makes a V-shaped
-/// notch, which reads as damage rather than as an arch.
+/// Arches need three or four sections each rather than one: a single raised
+/// section makes a V-shaped notch, which reads as damage rather than as an arch.
 pub fn profile(class: VehicleClass) -> BodyProfile {
     match class {
         // Three-box saloon: short bonnet, upright screen, a boot behind the
         // cabin. The default shape of a car.
         VehicleClass::Sedan | VehicleClass::Police => BodyProfile {
             shell: vec![
-                Section::new(0.00, 0.70, -0.28, 0.04, 3.5),
-                Section::new(0.04, 0.88, -0.56, 0.18, 4.0),
-                Section::new(0.10, 0.97, -0.64, 0.24, 4.5),
-                Section::new(0.14, 1.00, -0.52, 0.28, 4.5),
-                Section::new(0.19, 1.00, -0.30, 0.30, 4.5),
-                Section::new(0.24, 1.00, -0.52, 0.31, 4.5),
-                Section::new(0.31, 1.00, -0.66, 0.32, 4.5),
-                Section::new(0.50, 1.00, -0.68, 0.33, 4.5),
-                Section::new(0.70, 1.00, -0.66, 0.33, 4.5),
-                Section::new(0.76, 1.00, -0.52, 0.32, 4.5),
-                Section::new(0.81, 1.00, -0.30, 0.31, 4.5),
-                Section::new(0.86, 1.00, -0.52, 0.30, 4.5),
-                Section::new(0.92, 0.98, -0.64, 0.26, 4.5),
-                Section::new(0.97, 0.90, -0.56, 0.20, 4.0),
-                Section::new(1.00, 0.72, -0.28, 0.06, 3.5),
+                Section::new(0.00, 0.70, -0.46, 0.04, 3.5),
+                Section::new(0.04, 0.88, -0.58, 0.18, 4.0),
+                Section::new(0.09, 0.97, -0.60, 0.25, 4.5),
+                Section::new(0.13, 1.00, -0.44, 0.29, 5.0),
+                Section::new(0.19, 1.00, -0.10, 0.31, 5.0),
+                Section::new(0.25, 1.00, -0.44, 0.32, 5.0),
+                Section::new(0.31, 1.00, -0.56, 0.33, 5.0),
+                Section::new(0.50, 1.00, -0.58, 0.34, 5.0),
+                Section::new(0.69, 1.00, -0.56, 0.34, 5.0),
+                Section::new(0.75, 1.00, -0.44, 0.33, 5.0),
+                Section::new(0.81, 1.00, -0.10, 0.32, 5.0),
+                Section::new(0.87, 1.00, -0.44, 0.31, 5.0),
+                Section::new(0.92, 0.98, -0.60, 0.28, 4.5),
+                Section::new(0.97, 0.90, -0.58, 0.21, 4.0),
+                Section::new(1.00, 0.72, -0.46, 0.06, 3.5),
+            ],
+            lower: vec![
+                Section::new(0.02, 0.55, -0.62, -0.30, 4.0),
+                Section::new(0.09, 0.66, -0.74, -0.26, 5.0),
+                Section::new(0.14, 0.44, -0.76, -0.14, 5.0),
+                Section::new(0.19, 0.28, -0.76, -0.08, 5.0),
+                Section::new(0.25, 0.46, -0.76, -0.16, 5.0),
+                Section::new(0.32, 0.78, -0.78, -0.26, 5.5),
+                Section::new(0.50, 0.80, -0.78, -0.26, 5.5),
+                Section::new(0.68, 0.78, -0.78, -0.26, 5.5),
+                Section::new(0.75, 0.46, -0.76, -0.16, 5.0),
+                Section::new(0.81, 0.28, -0.76, -0.08, 5.0),
+                Section::new(0.87, 0.44, -0.76, -0.14, 5.0),
+                Section::new(0.92, 0.66, -0.74, -0.26, 5.0),
+                Section::new(0.98, 0.55, -0.62, -0.30, 4.0),
             ],
             cabin: vec![
-                Section::new(0.32, 0.60, 0.22, 0.40, 3.0),
-                Section::new(0.40, 0.78, 0.24, 0.68, 3.2),
-                Section::new(0.47, 0.84, 0.24, 0.86, 3.5),
-                Section::new(0.66, 0.84, 0.24, 0.88, 3.5),
-                Section::new(0.74, 0.78, 0.24, 0.72, 3.2),
-                Section::new(0.82, 0.58, 0.22, 0.42, 3.0),
+                Section::new(0.32, 0.56, 0.20, 0.38, 3.0),
+                Section::new(0.40, 0.74, 0.22, 0.64, 3.5),
+                Section::new(0.47, 0.80, 0.22, 0.80, 4.0),
+                Section::new(0.66, 0.80, 0.22, 0.82, 4.0),
+                Section::new(0.74, 0.74, 0.22, 0.68, 3.5),
+                Section::new(0.82, 0.54, 0.20, 0.40, 3.0),
             ],
         },
 
@@ -285,29 +311,44 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
         // cabin pushed forward with the mass behind it.
         VehicleClass::Sports => BodyProfile {
             shell: vec![
-                Section::new(0.00, 0.64, -0.46, -0.20, 3.0),
-                Section::new(0.05, 0.86, -0.74, -0.02, 3.0),
-                Section::new(0.11, 0.98, -0.82, 0.10, 3.2),
-                Section::new(0.16, 1.00, -0.62, 0.16, 3.4),
-                Section::new(0.21, 1.00, -0.36, 0.20, 3.4),
-                Section::new(0.26, 1.00, -0.62, 0.24, 3.4),
-                Section::new(0.34, 1.00, -0.84, 0.30, 3.4),
-                Section::new(0.52, 1.00, -0.86, 0.36, 3.4),
-                Section::new(0.70, 1.00, -0.84, 0.40, 3.4),
-                Section::new(0.76, 1.00, -0.62, 0.40, 3.4),
-                Section::new(0.81, 1.00, -0.36, 0.40, 3.4),
-                Section::new(0.86, 1.00, -0.62, 0.38, 3.4),
-                Section::new(0.93, 0.98, -0.82, 0.34, 3.2),
-                Section::new(0.98, 0.88, -0.70, 0.24, 3.0),
-                Section::new(1.00, 0.72, -0.46, 0.10, 3.0),
+                Section::new(0.00, 0.64, -0.56, -0.22, 3.0),
+                Section::new(0.05, 0.86, -0.66, -0.02, 3.2),
+                Section::new(0.10, 0.98, -0.68, 0.08, 3.6),
+                Section::new(0.15, 1.00, -0.50, 0.13, 4.0),
+                Section::new(0.21, 1.00, -0.14, 0.17, 4.0),
+                Section::new(0.27, 1.00, -0.50, 0.21, 4.0),
+                Section::new(0.34, 1.00, -0.64, 0.26, 4.0),
+                Section::new(0.52, 1.00, -0.66, 0.32, 4.0),
+                Section::new(0.69, 1.00, -0.64, 0.35, 4.0),
+                Section::new(0.75, 1.00, -0.50, 0.35, 4.0),
+                Section::new(0.81, 1.00, -0.14, 0.35, 4.0),
+                Section::new(0.87, 1.00, -0.50, 0.34, 4.0),
+                Section::new(0.93, 0.98, -0.68, 0.30, 3.6),
+                Section::new(0.98, 0.88, -0.62, 0.22, 3.2),
+                Section::new(1.00, 0.72, -0.56, 0.10, 3.0),
+            ],
+            lower: vec![
+                Section::new(0.02, 0.55, -0.70, -0.38, 3.5),
+                Section::new(0.09, 0.68, -0.84, -0.32, 4.5),
+                Section::new(0.14, 0.44, -0.86, -0.18, 4.5),
+                Section::new(0.21, 0.28, -0.86, -0.12, 4.5),
+                Section::new(0.27, 0.46, -0.86, -0.20, 4.5),
+                Section::new(0.34, 0.80, -0.88, -0.30, 5.0),
+                Section::new(0.52, 0.82, -0.88, -0.30, 5.0),
+                Section::new(0.68, 0.80, -0.88, -0.30, 5.0),
+                Section::new(0.75, 0.46, -0.86, -0.20, 4.5),
+                Section::new(0.81, 0.28, -0.86, -0.12, 4.5),
+                Section::new(0.87, 0.44, -0.86, -0.18, 4.5),
+                Section::new(0.93, 0.68, -0.84, -0.32, 4.5),
+                Section::new(0.98, 0.55, -0.70, -0.38, 3.5),
             ],
             cabin: vec![
-                Section::new(0.32, 0.56, 0.12, 0.28, 2.5),
-                Section::new(0.42, 0.78, 0.18, 0.68, 2.8),
-                Section::new(0.52, 0.84, 0.20, 0.86, 3.0),
-                Section::new(0.68, 0.82, 0.20, 0.84, 3.0),
-                Section::new(0.78, 0.72, 0.18, 0.62, 2.8),
-                Section::new(0.88, 0.54, 0.14, 0.34, 2.5),
+                Section::new(0.33, 0.52, 0.10, 0.24, 2.5),
+                Section::new(0.42, 0.72, 0.16, 0.60, 3.0),
+                Section::new(0.52, 0.78, 0.18, 0.78, 3.4),
+                Section::new(0.67, 0.76, 0.18, 0.78, 3.4),
+                Section::new(0.77, 0.66, 0.16, 0.56, 3.0),
+                Section::new(0.88, 0.50, 0.12, 0.30, 2.5),
             ],
         },
 
@@ -315,20 +356,35 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
         // length is cargo, which is what makes it read as a van and not a bus.
         VehicleClass::Truck => BodyProfile {
             shell: vec![
-                Section::new(0.00, 0.78, -0.44, 0.28, 5.0),
-                Section::new(0.04, 0.94, -0.72, 0.60, 5.5),
-                Section::new(0.09, 1.00, -0.80, 0.80, 6.0),
-                Section::new(0.14, 1.00, -0.60, 0.86, 6.0),
-                Section::new(0.19, 1.00, -0.38, 0.90, 6.0),
-                Section::new(0.24, 1.00, -0.60, 0.92, 6.0),
-                Section::new(0.30, 1.00, -0.82, 0.94, 6.0),
-                Section::new(0.55, 1.00, -0.84, 0.94, 6.0),
-                Section::new(0.76, 1.00, -0.82, 0.94, 6.0),
-                Section::new(0.81, 1.00, -0.60, 0.94, 6.0),
-                Section::new(0.86, 1.00, -0.38, 0.94, 6.0),
-                Section::new(0.91, 1.00, -0.60, 0.94, 6.0),
-                Section::new(0.97, 1.00, -0.82, 0.92, 6.0),
-                Section::new(1.00, 0.94, -0.70, 0.84, 5.5),
+                Section::new(0.00, 0.78, -0.36, 0.26, 5.0),
+                Section::new(0.04, 0.94, -0.50, 0.58, 5.5),
+                Section::new(0.08, 1.00, -0.54, 0.78, 6.0),
+                Section::new(0.13, 1.00, -0.40, 0.85, 6.0),
+                Section::new(0.19, 1.00, -0.04, 0.89, 6.0),
+                Section::new(0.25, 1.00, -0.40, 0.91, 6.0),
+                Section::new(0.31, 1.00, -0.52, 0.93, 6.0),
+                Section::new(0.55, 1.00, -0.54, 0.94, 6.0),
+                Section::new(0.75, 1.00, -0.52, 0.94, 6.0),
+                Section::new(0.81, 1.00, -0.40, 0.94, 6.0),
+                Section::new(0.87, 1.00, -0.04, 0.94, 6.0),
+                Section::new(0.93, 1.00, -0.40, 0.94, 6.0),
+                Section::new(0.98, 1.00, -0.54, 0.92, 6.0),
+                Section::new(1.00, 0.94, -0.46, 0.84, 5.5),
+            ],
+            lower: vec![
+                Section::new(0.02, 0.62, -0.58, -0.22, 5.0),
+                Section::new(0.09, 0.74, -0.80, -0.18, 5.5),
+                Section::new(0.14, 0.48, -0.84, -0.06, 5.5),
+                Section::new(0.19, 0.30, -0.84, 0.00, 5.5),
+                Section::new(0.25, 0.50, -0.84, -0.08, 5.5),
+                Section::new(0.32, 0.84, -0.86, -0.18, 6.0),
+                Section::new(0.55, 0.86, -0.86, -0.18, 6.0),
+                Section::new(0.75, 0.84, -0.86, -0.18, 6.0),
+                Section::new(0.81, 0.50, -0.84, -0.08, 5.5),
+                Section::new(0.87, 0.30, -0.84, 0.00, 5.5),
+                Section::new(0.93, 0.48, -0.84, -0.06, 5.5),
+                Section::new(0.97, 0.74, -0.80, -0.18, 5.5),
+                Section::new(1.00, 0.62, -0.58, -0.22, 5.0),
             ],
             // The cab glass is part of the box, so there is no separate
             // greenhouse to raise above it.
@@ -337,7 +393,6 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
     }
 }
 
-/// Builds every mesh one archetype needs.
 /// How much narrower the paintwork is than the collider it sits in.
 ///
 /// Bodywork exactly as wide as the box swallows the wheels: the track is inside
@@ -348,12 +403,20 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
 /// wheels at all.
 const BODY_INSET: f32 = 0.93;
 
-pub fn build(class: VehicleClass, spec: &VehicleSpec) -> (Mesh, Option<Mesh>) {
+pub struct BodyMeshes {
+    pub shell: Mesh,
+    pub lower: Mesh,
+    pub cabin: Option<Mesh>,
+}
+
+pub fn build(class: VehicleClass, spec: &VehicleSpec) -> BodyMeshes {
     let profile = profile(class);
     let scale = spec.half_extents * Vec3::new(BODY_INSET, 1.0, 1.0);
-    let shell = loft(&profile.shell, scale);
-    let cabin = (!profile.cabin.is_empty()).then(|| loft(&profile.cabin, scale));
-    (shell, cabin)
+    BodyMeshes {
+        shell: loft(&profile.shell, scale),
+        lower: loft(&profile.lower, scale),
+        cabin: (!profile.cabin.is_empty()).then(|| loft(&profile.cabin, scale)),
+    }
 }
 
 #[cfg(test)]
@@ -375,7 +438,7 @@ mod tests {
             VehicleClass::Police,
         ] {
             let spec = class.spec();
-            let (shell, _) = build(class, &spec);
+            let BodyMeshes { shell, .. } = build(class, &spec);
             assert!(vertex_count(&shell) > RING, "{class:?} shell is empty");
             assert!(
                 shell.attribute(Mesh::ATTRIBUTE_NORMAL).is_some(),
@@ -394,11 +457,15 @@ mod tests {
             VehicleClass::Sports,
             VehicleClass::Truck,
         ] {
-            let BodyProfile { shell, cabin } = profile(class);
-            for section in shell {
+            let BodyProfile {
+                shell,
+                lower,
+                cabin,
+            } = profile(class);
+            for section in shell.iter().chain(lower.iter()) {
                 assert!(
                     section.half_width <= 1.0 && section.bottom >= -1.0,
-                    "{class:?} shell section at {} escapes the collider",
+                    "{class:?} section at {} escapes the collider",
                     section.at
                 );
             }
@@ -417,8 +484,12 @@ mod tests {
             VehicleClass::Sports,
             VehicleClass::Truck,
         ] {
-            let BodyProfile { shell, cabin } = profile(class);
-            for run in [shell, cabin] {
+            let BodyProfile {
+                shell,
+                lower,
+                cabin,
+            } = profile(class);
+            for run in [shell, lower, cabin] {
                 for pair in run.windows(2) {
                     assert!(
                         pair[1].at > pair[0].at,
@@ -436,7 +507,7 @@ mod tests {
         // If the greenhouse is not taller than the body it is set into, it is
         // invisible and the car reads as a brick.
         for class in [VehicleClass::Sedan, VehicleClass::Sports] {
-            let BodyProfile { shell, cabin } = profile(class);
+            let BodyProfile { shell, cabin, .. } = profile(class);
             let beltline = shell.iter().map(|s| s.top).fold(f32::MIN, f32::max);
             let roof = cabin.iter().map(|s| s.top).fold(f32::MIN, f32::max);
             assert!(roof > beltline, "{class:?} has no visible greenhouse");
