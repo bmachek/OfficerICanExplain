@@ -105,6 +105,7 @@ cargo run -- --screenshot shots/map.png    --follow --map
 |---|---|
 | `--at x,y,z` / `--look x,y,z` | Camera pose |
 | `--at-node N` | Stand at road junction N, looking down the street |
+| `--at-car` | Frame the nearest parked car, three-quarters on |
 | `--eye H` | Eye height for `--at-node` |
 | `--follow` | Use the real third-person camera |
 | `--drive` | Take the nearest car and drive it (also logs telemetry) |
@@ -143,6 +144,23 @@ a whole tower face without smearing, and tiling it per storey would repeat the
 lit-window pattern with it — which is the one thing that must not repeat. Doing
 both needs a material with a second, independent detail UV.
 
+## Vehicles
+
+Bodywork is lofted: each archetype is a handful of cross-sections along the
+car's length — where the bonnet drops, how far the screen is raked, how much of
+the length the cabin takes — skinned into a mesh. A silhouette is what makes a
+vehicle recognisable, and that makes it a table of numbers per archetype rather
+than a modelling job. Sections are normalised and scaled by the spec's
+half-extents, so resizing a car reshapes its body without redrawing it.
+
+The shapes are archetypes, not reproductions: a saloon, a mid-engined wedge, a
+box van. Copying a real car's lines would mean copying design its manufacturer
+protects, and an archetype reads faster anyway.
+
+Wheels are surfaces of revolution with the tread and the spokes painted on and
+normal-mapped rather than modelled — geometry that fine is a blur above walking
+pace.
+
 ## Audio
 
 There are no sound files either. `audio::synth` is a small DSP kit — partials,
@@ -167,5 +185,9 @@ pursuit, and everything but the player's own car is positioned in the world.
 - Roads have no markings: no lane lines, no crossings, no junction paint.
 - Facades are procedural, so walls read as materials rather than photographs.
   Scanning them needs a custom material with a detail UV; see above.
-- Vehicles are boxes. No panel shapes, no wheel detail, no visible damage.
+- Vehicle bodywork is lofted from cross-sections, and the sections still need
+  tuning: the saloon reads rounder and more bulbous than it should, and there
+  are no arches, because raising a lofted ring's floor raises it across the
+  whole car rather than over one wheel.
+- No visible damage. Cars are wrecked, not deformed.
 - There is one scanned set per surface, so a whole district paves identically.

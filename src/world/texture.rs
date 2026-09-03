@@ -8,6 +8,10 @@
 //!
 //! Two details cost more thought than they look:
 //!
+//! The noise, painting and mip helpers at the top are the shared kit: anything
+//! in the project that needs to paint a texture uses them rather than growing
+//! its own. The generators below them are the city's own surfaces.
+//!
 //! * **Mip chains are built here.** Bevy has no runtime mip generator, and a
 //!   texture tiled a few hundred times across the ground plane without mips
 //!   aliases into a shimmering mess the moment the camera moves. Levels are
@@ -42,11 +46,11 @@ fn hash(x: u32, y: u32, seed: u32) -> u32 {
 }
 
 /// A stable pseudo-random number in 0..1 for a lattice cell.
-fn hash01(x: u32, y: u32, seed: u32) -> f32 {
+pub fn hash01(x: u32, y: u32, seed: u32) -> f32 {
     hash(x, y, seed) as f32 / u32::MAX as f32
 }
 
-fn smoothstep(t: f32) -> f32 {
+pub fn smoothstep(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
@@ -73,7 +77,7 @@ fn value_noise(u: f32, v: f32, period: u32, seed: u32) -> f32 {
 
 /// Summed octaves of [`value_noise`], each one wrapping at twice the rate of
 /// the last so the whole stack still tiles.
-fn fbm(u: f32, v: f32, period: u32, octaves: u32, seed: u32) -> f32 {
+pub fn fbm(u: f32, v: f32, period: u32, octaves: u32, seed: u32) -> f32 {
     let mut sum = 0.0;
     let mut amplitude = 1.0;
     let mut total = 0.0;
@@ -89,7 +93,7 @@ fn fbm(u: f32, v: f32, period: u32, octaves: u32, seed: u32) -> f32 {
 
 /// Ridged noise: peaks where the underlying field crosses its midpoint, which
 /// draws thin wandering lines rather than blobs. Used for cracks.
-fn ridge(u: f32, v: f32, period: u32, octaves: u32, seed: u32) -> f32 {
+pub fn ridge(u: f32, v: f32, period: u32, octaves: u32, seed: u32) -> f32 {
     1.0 - (fbm(u, v, period, octaves, seed) * 2.0 - 1.0).abs()
 }
 
@@ -112,12 +116,12 @@ fn linear_to_srgb(c: f32) -> f32 {
     }
 }
 
-fn byte(value: f32) -> u8 {
+pub fn byte(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 /// One box-filter step of a mip chain.
-pub(super) fn downsample(src: &[u8], width: u32, height: u32, srgb: bool) -> (Vec<u8>, u32, u32) {
+pub fn downsample(src: &[u8], width: u32, height: u32, srgb: bool) -> (Vec<u8>, u32, u32) {
     let (dw, dh) = ((width / 2).max(1), (height / 2).max(1));
     let mut out = vec![0u8; (dw * dh * 4) as usize];
 
@@ -155,7 +159,7 @@ pub(super) fn downsample(src: &[u8], width: u32, height: u32, srgb: bool) -> (Ve
 ///
 /// Built with `new_uninit` rather than `Image::new` because the latter asserts
 /// that the data is exactly one mip level.
-fn painted(size: u32, format: TextureFormat, paint: impl Fn(f32, f32) -> [u8; 4]) -> Image {
+pub fn painted(size: u32, format: TextureFormat, paint: impl Fn(f32, f32) -> [u8; 4]) -> Image {
     let mut data = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {
         for x in 0..size {
@@ -212,7 +216,7 @@ fn painted(size: u32, format: TextureFormat, paint: impl Fn(f32, f32) -> [u8; 4]
 /// nothing else. `relief` is how tall the bumps are as a fraction of the tile —
 /// small numbers only. Push it past a few percent and a flat surface starts to
 /// look like it was moulded out of putty.
-fn normal_map(size: u32, relief: f32, height: impl Fn(f32, f32) -> f32) -> Image {
+pub fn normal_map(size: u32, relief: f32, height: impl Fn(f32, f32) -> f32) -> Image {
     let step = 1.0 / size as f32;
     // Slope per texel, converted to slope per unit of UV.
     let scale = relief * size as f32 * 0.5;
@@ -414,7 +418,7 @@ pub struct FacadeMaps {
     pub normal: Image,
 }
 
-fn smoothstep01(t: f32) -> f32 {
+pub fn smoothstep01(t: f32) -> f32 {
     smoothstep(t.clamp(0.0, 1.0))
 }
 

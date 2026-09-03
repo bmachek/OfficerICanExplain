@@ -1,8 +1,10 @@
 //! Vehicles: arcade physics, spawning, and the cars themselves.
 
+pub mod body;
 pub mod controller;
 pub mod damage;
 pub mod lights;
+pub mod paint;
 pub mod spawn;
 pub mod spec;
 
@@ -44,7 +46,12 @@ fn setup_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    commands.insert_resource(spawn::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(spawn::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
     commands.insert_resource(lights::build_assets(&mut meshes, &mut materials));
 }

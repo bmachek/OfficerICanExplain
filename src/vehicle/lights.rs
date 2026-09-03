@@ -119,12 +119,13 @@ fn lamps_for(
     spec: &VehicleSpec,
 ) {
     let half = spec.half_extents;
-    // A shade proud of the bodywork, so the lens is never z-fighting the panel
-    // it is set into.
-    let nose = -half.z - 0.02;
-    let tail = half.z + 0.02;
-    let lamp_y = -half.y * 0.05;
-    let lamp_x = half.x * 0.66;
+    // Set into the flanks just behind the nose and just ahead of the tail,
+    // rather than pinned to the collider box: the bodywork tucks in at both
+    // ends, and a lamp on the box's corner hangs in the air beside the car.
+    let nose = -half.z * 0.95;
+    let tail = half.z * 0.96;
+    let lamp_y = half.y * 0.06;
+    let lamp_x = half.x * 0.44;
 
     for side in [-1.0f32, 1.0] {
         parent.spawn((

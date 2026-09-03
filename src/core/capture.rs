@@ -58,6 +58,12 @@ pub struct CaptureRequest {
     pub follow: bool,
     /// Opens the full-screen map.
     pub map: bool,
+    /// Poses the camera three-quarters on to the nearest parked car.
+    ///
+    /// Bodywork is the one thing a street-level shot never shows properly: from
+    /// the pavement a car is a silhouette, and from behind the wheels are
+    /// hidden by its own bumper. Judging a body change needs this view.
+    pub at_car: bool,
     /// Puts the player in the nearest car and holds the throttle down.
     /// An end-to-end smoke test of enter -> drive -> chase camera that needs
     /// nobody at the keyboard.
@@ -115,6 +121,7 @@ pub fn parse_args() -> Option<CaptureRequest> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1.7),
         hour: value_of("--hour").and_then(|v| v.parse().ok()),
+        at_car: args.iter().any(|a| a == "--at-car"),
         follow: args.iter().any(|a| a == "--follow"),
         drive: args.iter().any(|a| a == "--drive"),
         map: args.iter().any(|a| a == "--map"),
@@ -143,6 +150,7 @@ impl Plugin for CapturePlugin {
             })
             .add_systems(PreStartup, apply_capture_overrides)
             .add_systems(PostStartup, retarget_camera_offscreen)
+            .add_systems(Update, pose_at_car)
             .add_systems(
                 FixedUpdate,
                 autodrive.before(crate::vehicle::controller::drive_vehicles),
@@ -402,4 +410,46 @@ fn autodrive(
         }
         let _ = car;
     }
+}
+
+/// Frames the nearest parked car, once the parked cars exist.
+///
+/// Deferred to `Update` rather than done with the rest of the pose because
+/// `spawn_parked_vehicles` runs in `PostStartup` alongside it, and there is no
+/// ordering between them worth asserting for a debug flag.
+fn pose_at_car(
+    request: Res<CaptureRequest>,
+    mut done: Local<bool>,
+    vehicles: Query<&Transform, (With<Vehicle>, Without<CameraRig>)>,
+    mut cameras: Query<(&mut Transform, &mut CameraRig)>,
+) {
+    if *done || !request.at_car {
+        return;
+    }
+    let Some(car) = vehicles
+        .iter()
+        .min_by(|a, b| {
+            a.translation
+                .length_squared()
+                .total_cmp(&b.translation.length_squared())
+        })
+        .copied()
+    else {
+        return;
+    };
+
+    // Off the front three-quarter, at about eye height for someone standing
+    // beside it: the angle every car photograph is taken from, because it shows
+    // the nose, one flank and both wheels on that side at once.
+    let eye = car.transform_point(Vec3::new(3.4, 1.15, -4.2));
+    let target = car.translation + Vec3::Y * 0.35;
+
+    for (mut transform, mut rig) in &mut cameras {
+        rig.mode = CameraMode::Free;
+        *transform = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        rig.yaw = yaw;
+        rig.pitch = pitch;
+    }
+    *done = true;
 }
