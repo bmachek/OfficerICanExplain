@@ -384,12 +384,7 @@ mod tests {
 
     #[test]
     fn every_vehicle_settles_at_its_designed_ride_height() {
-        for class in [
-            VehicleClass::Sedan,
-            VehicleClass::Sports,
-            VehicleClass::Truck,
-            VehicleClass::Police,
-        ] {
+        for class in VehicleClass::ALL {
             let (mut app, car, spec) = harness(class, 3.0);
             step(&mut app, 400);
 

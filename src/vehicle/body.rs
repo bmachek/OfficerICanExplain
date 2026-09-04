@@ -25,9 +25,13 @@ use bevy::prelude::*;
 
 use super::spec::{VehicleClass, VehicleSpec};
 
-/// Points around one cross-section. Twenty is enough that a roofline reads as
-/// curved and few enough that a street full of cars is still cheap.
-const RING: usize = 20;
+/// Points around one cross-section.
+///
+/// Twenty-eight rather than twenty because the shoulder — the turn from flank
+/// to roof — is what makes a body read as pressed steel rather than moulded,
+/// and a tight turn needs points to land on. Still small: a car is under a
+/// thousand triangles.
+const RING: usize = 28;
 
 /// One cross-section of a body, in units of the spec's half-extents.
 ///
@@ -275,11 +279,11 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
                 Section::new(0.09, 0.97, -0.60, 0.25, 4.5),
                 Section::new(0.13, 1.00, -0.44, 0.29, 5.0),
                 Section::new(0.19, 1.00, -0.10, 0.31, 5.0),
-                Section::new(0.25, 1.00, -0.44, 0.32, 5.0),
-                Section::new(0.31, 1.00, -0.56, 0.33, 5.0),
-                Section::new(0.50, 1.00, -0.58, 0.34, 5.0),
-                Section::new(0.69, 1.00, -0.56, 0.34, 5.0),
-                Section::new(0.75, 1.00, -0.44, 0.33, 5.0),
+                Section::new(0.25, 1.00, -0.44, 0.32, 6.0),
+                Section::new(0.31, 1.00, -0.56, 0.33, 6.5),
+                Section::new(0.50, 1.00, -0.58, 0.34, 6.5),
+                Section::new(0.69, 1.00, -0.56, 0.34, 6.5),
+                Section::new(0.75, 1.00, -0.44, 0.33, 6.0),
                 Section::new(0.81, 1.00, -0.10, 0.32, 5.0),
                 Section::new(0.87, 1.00, -0.44, 0.31, 5.0),
                 Section::new(0.92, 0.98, -0.60, 0.28, 4.5),
@@ -308,6 +312,102 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
                 Section::new(0.66, 0.80, 0.22, 0.82, 4.0),
                 Section::new(0.74, 0.74, 0.22, 0.68, 3.5),
                 Section::new(0.82, 0.54, 0.20, 0.40, 3.0),
+            ],
+        },
+
+        // Long bonnet, short deck, fastback roof running unbroken into the
+        // tail. The proportion is the whole point: two thirds of the length is
+        // in front of the driver.
+        VehicleClass::Coupe => BodyProfile {
+            shell: vec![
+                Section::new(0.00, 0.70, -0.42, 0.02, 4.0),
+                Section::new(0.04, 0.90, -0.54, 0.16, 4.5),
+                Section::new(0.09, 0.98, -0.58, 0.22, 5.5),
+                Section::new(0.13, 1.00, -0.42, 0.25, 6.0),
+                Section::new(0.19, 1.00, -0.16, 0.27, 6.0),
+                Section::new(0.25, 1.00, -0.42, 0.28, 6.5),
+                Section::new(0.33, 1.00, -0.54, 0.30, 6.5),
+                Section::new(0.52, 1.00, -0.56, 0.32, 6.5),
+                Section::new(0.70, 1.00, -0.54, 0.34, 6.5),
+                Section::new(0.76, 1.00, -0.42, 0.34, 6.0),
+                Section::new(0.82, 1.00, -0.16, 0.34, 6.0),
+                Section::new(0.88, 1.00, -0.42, 0.33, 6.0),
+                Section::new(0.94, 0.98, -0.58, 0.30, 5.5),
+                Section::new(0.98, 0.90, -0.54, 0.24, 4.5),
+                Section::new(1.00, 0.74, -0.42, 0.12, 4.0),
+            ],
+            lower: vec![
+                Section::new(0.02, 0.56, -0.60, -0.28, 4.0),
+                Section::new(0.09, 0.68, -0.72, -0.24, 5.0),
+                Section::new(0.14, 0.44, -0.74, -0.12, 5.0),
+                Section::new(0.19, 0.28, -0.74, -0.06, 5.0),
+                Section::new(0.25, 0.46, -0.74, -0.14, 5.0),
+                Section::new(0.33, 0.80, -0.76, -0.24, 5.5),
+                Section::new(0.52, 0.82, -0.76, -0.24, 5.5),
+                Section::new(0.70, 0.80, -0.76, -0.24, 5.5),
+                Section::new(0.76, 0.46, -0.74, -0.14, 5.0),
+                Section::new(0.82, 0.28, -0.74, -0.06, 5.0),
+                Section::new(0.88, 0.44, -0.74, -0.12, 5.0),
+                Section::new(0.94, 0.68, -0.72, -0.24, 5.0),
+                Section::new(0.98, 0.56, -0.60, -0.28, 4.0),
+            ],
+            // Set well back and running all the way to the tail: a fastback
+            // has no boot lid to speak of.
+            cabin: vec![
+                Section::new(0.44, 0.54, 0.18, 0.36, 3.0),
+                Section::new(0.53, 0.74, 0.20, 0.66, 3.5),
+                Section::new(0.60, 0.78, 0.20, 0.78, 4.0),
+                Section::new(0.74, 0.76, 0.20, 0.74, 4.0),
+                Section::new(0.86, 0.66, 0.18, 0.52, 3.5),
+                Section::new(0.95, 0.50, 0.16, 0.30, 3.0),
+            ],
+        },
+
+        // Cab forward, open bed behind. The step down from roof to bed sides is
+        // the silhouette, so the shell drops hard at two thirds of the length
+        // and the bed walls are what is left.
+        VehicleClass::Pickup => BodyProfile {
+            shell: vec![
+                Section::new(0.00, 0.78, -0.30, 0.14, 5.0),
+                Section::new(0.04, 0.94, -0.42, 0.30, 5.5),
+                Section::new(0.09, 1.00, -0.46, 0.36, 6.0),
+                Section::new(0.13, 1.00, -0.30, 0.38, 6.0),
+                Section::new(0.18, 1.00, -0.06, 0.40, 6.0),
+                Section::new(0.23, 1.00, -0.30, 0.40, 6.0),
+                Section::new(0.30, 1.00, -0.42, 0.40, 6.5),
+                Section::new(0.55, 1.00, -0.44, 0.40, 6.5),
+                Section::new(0.62, 1.00, -0.44, 0.34, 6.5),
+                Section::new(0.70, 1.00, -0.44, 0.30, 7.0),
+                Section::new(0.78, 1.00, -0.30, 0.30, 7.0),
+                Section::new(0.84, 1.00, -0.06, 0.30, 7.0),
+                Section::new(0.90, 1.00, -0.30, 0.30, 7.0),
+                Section::new(0.97, 1.00, -0.44, 0.28, 6.5),
+                Section::new(1.00, 0.94, -0.36, 0.24, 5.5),
+            ],
+            lower: vec![
+                Section::new(0.02, 0.62, -0.52, -0.18, 5.0),
+                Section::new(0.09, 0.76, -0.72, -0.14, 5.5),
+                Section::new(0.13, 0.48, -0.74, -0.02, 5.5),
+                Section::new(0.18, 0.30, -0.74, 0.04, 5.5),
+                Section::new(0.23, 0.50, -0.74, -0.04, 5.5),
+                Section::new(0.32, 0.84, -0.76, -0.14, 6.0),
+                Section::new(0.55, 0.86, -0.76, -0.14, 6.0),
+                Section::new(0.74, 0.84, -0.76, -0.14, 6.0),
+                Section::new(0.78, 0.50, -0.74, -0.04, 5.5),
+                Section::new(0.84, 0.30, -0.74, 0.04, 5.5),
+                Section::new(0.90, 0.48, -0.74, -0.02, 5.5),
+                Section::new(0.96, 0.76, -0.72, -0.14, 5.5),
+                Section::new(1.00, 0.62, -0.52, -0.18, 5.0),
+            ],
+            // A tall cab over the front half only, which is what makes the
+            // flat deck behind it read as a bed rather than as a missing roof.
+            cabin: vec![
+                Section::new(0.24, 0.60, 0.30, 0.48, 3.5),
+                Section::new(0.31, 0.82, 0.32, 0.86, 4.5),
+                Section::new(0.38, 0.86, 0.32, 1.00, 5.0),
+                Section::new(0.56, 0.86, 0.32, 1.00, 5.0),
+                Section::new(0.60, 0.80, 0.32, 0.92, 4.5),
+                Section::new(0.62, 0.66, 0.30, 0.60, 3.5),
             ],
         },
 
@@ -476,12 +576,7 @@ mod tests {
 
     #[test]
     fn every_archetype_builds_a_closed_shell() {
-        for class in [
-            VehicleClass::Sedan,
-            VehicleClass::Sports,
-            VehicleClass::Truck,
-            VehicleClass::Police,
-        ] {
+        for class in VehicleClass::ALL {
             let spec = class.spec();
             let BodyMeshes { shell, .. } = build(class, &spec);
             assert!(vertex_count(&shell) > RING, "{class:?} shell is empty");
@@ -497,11 +592,7 @@ mod tests {
         // The box collider is the physical car. Bodywork poking out of it would
         // mean visible contact that never happens and panels that pass through
         // walls, so every section has to stay within the half-extents.
-        for class in [
-            VehicleClass::Sedan,
-            VehicleClass::Sports,
-            VehicleClass::Truck,
-        ] {
+        for class in VehicleClass::ALL {
             let BodyProfile {
                 shell,
                 lower,
@@ -524,11 +615,7 @@ mod tests {
 
     #[test]
     fn sections_run_nose_to_tail_in_order() {
-        for class in [
-            VehicleClass::Sedan,
-            VehicleClass::Sports,
-            VehicleClass::Truck,
-        ] {
+        for class in VehicleClass::ALL {
             let BodyProfile {
                 shell,
                 lower,
@@ -551,7 +638,13 @@ mod tests {
     fn a_cabin_sits_above_its_shells_beltline() {
         // If the greenhouse is not taller than the body it is set into, it is
         // invisible and the car reads as a brick.
-        for class in [VehicleClass::Sedan, VehicleClass::Sports] {
+        for class in [
+            VehicleClass::Sedan,
+            VehicleClass::Coupe,
+            VehicleClass::Sports,
+            VehicleClass::Pickup,
+            VehicleClass::Police,
+        ] {
             let BodyProfile { shell, cabin, .. } = profile(class);
             let beltline = shell.iter().map(|s| s.top).fold(f32::MIN, f32::max);
             let roof = cabin.iter().map(|s| s.top).fold(f32::MIN, f32::max);

@@ -329,19 +329,34 @@ fn switch_driven_lamps(
     }
 }
 
-/// Runs the light bars. All police share one pair of materials, so every bar in
-/// the city flashes together — which is what a convoy of cruisers does anyway,
-/// and it keeps the whole effect at two material writes a frame.
+/// Runs the light bars.
+///
+/// All police share one pair of materials, so every bar in the city flashes
+/// together — which is what a convoy of cruisers does anyway, and it keeps the
+/// whole effect at two material writes a frame. The cost of sharing is that
+/// "is anyone actually on a call" has to be answered once for the whole force
+/// rather than per car; a cruiser sitting at a kerb with its bar going is a
+/// cruiser that has stopped meaning anything when it does.
 fn flash_beacons(
     time: Res<Time>,
     assets: Res<LightAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    units: Query<&PoliceUnit>,
 ) {
+    let responding = units
+        .iter()
+        .any(|unit| unit.state != PursuitState::Responding || unit.has_sight);
+
     let phase = (time.elapsed_secs() / BEACON_PERIOD).fract();
-    // A hard square wave with a short overlap, not a sine: emergency lights
-    // strobe, and a smooth fade reads as a fairground.
-    let red = if phase < 0.5 { 1.0 } else { 0.0 };
-    let blue = 1.0 - red;
+    // A hard square wave, not a sine: emergency lights strobe, and a smooth
+    // fade reads as a fairground.
+    let (red, blue) = if !responding {
+        (0.0, 0.0)
+    } else if phase < 0.5 {
+        (1.0, 0.0)
+    } else {
+        (0.0, 1.0)
+    };
 
     if let Some(mut material) = materials.get_mut(&assets.beacon_red) {
         material.emissive = LinearRgba::rgb(46.0 * red, 1.5 * red, 1.0 * red);
@@ -371,9 +386,6 @@ fn police_beacon_wash(
     };
 
     for (unit, police, children) in &units {
-        // Only while they are actually after someone. A cruiser rolling past on
-        // patrol with its bar going is a cruiser that has stopped meaning
-        // anything when it does.
         let running = police.state != PursuitState::Responding || police.has_sight;
 
         let wash = children

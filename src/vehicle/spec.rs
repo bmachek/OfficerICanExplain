@@ -14,22 +14,40 @@ pub const WHEEL_COUNT: usize = 4;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VehicleClass {
     Sedan,
+    Coupe,
     Sports,
+    Pickup,
     Truck,
     Police,
 }
 
 impl VehicleClass {
-    pub const CIVILIAN: [VehicleClass; 3] = [
+    /// Everything that turns up as traffic or parked at a kerb.
+    pub const CIVILIAN: [VehicleClass; 5] = [
         VehicleClass::Sedan,
+        VehicleClass::Coupe,
         VehicleClass::Sports,
+        VehicleClass::Pickup,
         VehicleClass::Truck,
+    ];
+
+    /// Every class, including the ones nobody parks. Used to build the meshes
+    /// and to make sure a test covers all of them.
+    pub const ALL: [VehicleClass; 6] = [
+        VehicleClass::Sedan,
+        VehicleClass::Coupe,
+        VehicleClass::Sports,
+        VehicleClass::Pickup,
+        VehicleClass::Truck,
+        VehicleClass::Police,
     ];
 
     pub fn spec(self) -> VehicleSpec {
         match self {
             VehicleClass::Sedan => VehicleSpec::sedan(),
+            VehicleClass::Coupe => VehicleSpec::coupe(),
             VehicleClass::Sports => VehicleSpec::sports(),
+            VehicleClass::Pickup => VehicleSpec::pickup(),
             VehicleClass::Truck => VehicleSpec::truck(),
             VehicleClass::Police => VehicleSpec::police(),
         }
@@ -163,6 +181,43 @@ impl VehicleSpec {
         }
     }
 
+    /// Long bonnet, short deck, far too much engine. Quick in a straight line
+    /// and unwilling to change direction, which is the entire character.
+    fn coupe() -> Self {
+        Self {
+            class: VehicleClass::Coupe,
+            display_name: "Coupe",
+            half_extents: Vec3::new(0.94, 0.55, 2.45),
+            mass: 1620.0,
+            center_of_mass: Vec3::new(0.0, -0.44, 0.0),
+            wheel_base: 2.95,
+            track: 1.62,
+            wheel_radius: 0.36,
+            axle_height: -0.28,
+            suspension_rest: 0.46,
+            spring_strength: 34_000.0,
+            damping: 3_100.0,
+            anti_roll: 8_000.0,
+            engine_force: 22_000.0,
+            brake_force: 25_000.0,
+            reverse_force: 8_000.0,
+            max_speed: 50.0,
+            drag: 3.4,
+            downforce: 7.0,
+            max_steer: 0.50,
+            steer_rate: 6.5,
+            high_speed_steer: 0.36,
+            front_grip: 1.55,
+            // Well under the front: this is a car that leaves in a cloud of
+            // its own tyre smoke if you ask it to.
+            rear_grip: 1.28,
+            handbrake_grip: 0.16,
+            roll_couple: 0.38,
+            body_color: Color::srgb(0.62, 0.18, 0.16),
+            body_metallic: 0.35,
+        }
+    }
+
     fn sports() -> Self {
         Self {
             class: VehicleClass::Sports,
@@ -193,6 +248,43 @@ impl VehicleSpec {
             roll_couple: 0.22,
             body_color: Color::srgb(0.90, 0.72, 0.16),
             body_metallic: 0.35,
+        }
+    }
+
+    /// Body-on-frame pickup: a cab and an open bed. Rides high, leans, and
+    /// carries its weight where a saloon does not.
+    fn pickup() -> Self {
+        Self {
+            class: VehicleClass::Pickup,
+            display_name: "Pickup",
+            half_extents: Vec3::new(1.00, 0.78, 2.65),
+            mass: 2300.0,
+            center_of_mass: Vec3::new(0.0, -0.48, 0.0),
+            wheel_base: 3.20,
+            track: 1.72,
+            wheel_radius: 0.42,
+            axle_height: -0.38,
+            suspension_rest: 0.56,
+            spring_strength: 44_000.0,
+            damping: 4_400.0,
+            anti_roll: 11_000.0,
+            engine_force: 18_000.0,
+            brake_force: 32_000.0,
+            reverse_force: 9_000.0,
+            max_speed: 36.0,
+            drag: 4.4,
+            downforce: 6.0,
+            max_steer: 0.50,
+            steer_rate: 6.5,
+            high_speed_steer: 0.46,
+            front_grip: 1.46,
+            // An empty bed over the driven axle is the reason a pickup steps
+            // out in the wet.
+            rear_grip: 1.30,
+            handbrake_grip: 0.26,
+            roll_couple: 0.42,
+            body_color: Color::srgb(0.32, 0.46, 0.38),
+            body_metallic: 0.20,
         }
     }
 
@@ -253,12 +345,7 @@ mod tests {
 
     #[test]
     fn wheel_anchors_are_symmetric_and_correctly_ordered() {
-        for class in [
-            VehicleClass::Sedan,
-            VehicleClass::Sports,
-            VehicleClass::Truck,
-            VehicleClass::Police,
-        ] {
+        for class in VehicleClass::ALL {
             let spec = class.spec();
             let [fl, fr, rl, rr] = spec.wheel_anchors();
 
@@ -275,12 +362,7 @@ mod tests {
     fn suspension_can_carry_the_vehicle() {
         // If the springs cannot hold the car up at a sane ride height it will
         // sit on its belly, which reads as "the physics is broken".
-        for class in [
-            VehicleClass::Sedan,
-            VehicleClass::Sports,
-            VehicleClass::Truck,
-            VehicleClass::Police,
-        ] {
+        for class in VehicleClass::ALL {
             let spec = class.spec();
             let load_per_wheel = spec.mass * 9.81 / WHEEL_COUNT as f32;
             let compression = load_per_wheel / spec.spring_strength;
@@ -297,12 +379,7 @@ mod tests {
     fn rear_grip_never_exceeds_front() {
         // Front grip above rear gives understeer, which feels dead. Keep every
         // preset on the lively side of neutral.
-        for class in [
-            VehicleClass::Sedan,
-            VehicleClass::Sports,
-            VehicleClass::Truck,
-            VehicleClass::Police,
-        ] {
+        for class in VehicleClass::ALL {
             let spec = class.spec();
             assert!(spec.rear_grip <= spec.front_grip, "{}", spec.display_name);
             assert!(spec.handbrake_grip < spec.rear_grip * 0.5);

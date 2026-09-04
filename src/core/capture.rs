@@ -67,6 +67,9 @@ pub struct CaptureRequest {
     /// Beats the framed car up by this fraction before shooting it, so damage
     /// can be judged without driving into a wall at the right angle first.
     pub damage: f32,
+    /// Lines one of every archetype up down the street and shoots the row.
+    /// The only way to compare bodywork without hunting the city for a pickup.
+    pub showroom: bool,
     /// Puts the player in the nearest car and holds the throttle down.
     /// An end-to-end smoke test of enter -> drive -> chase camera that needs
     /// nobody at the keyboard.
@@ -128,6 +131,7 @@ pub fn parse_args() -> Option<CaptureRequest> {
         damage: value_of("--damage")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0),
+        showroom: args.iter().any(|a| a == "--showroom"),
         follow: args.iter().any(|a| a == "--follow"),
         drive: args.iter().any(|a| a == "--drive"),
         map: args.iter().any(|a| a == "--map"),
@@ -156,7 +160,7 @@ impl Plugin for CapturePlugin {
             })
             .add_systems(PreStartup, apply_capture_overrides)
             .add_systems(PostStartup, retarget_camera_offscreen)
-            .add_systems(Update, pose_at_car)
+            .add_systems(Update, (pose_at_car, line_up_showroom))
             .add_systems(
                 FixedUpdate,
                 autodrive.before(crate::vehicle::controller::drive_vehicles),
@@ -483,6 +487,70 @@ fn pose_at_car(
     for (mut transform, mut rig) in &mut cameras {
         rig.mode = CameraMode::Free;
         *transform = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        rig.yaw = yaw;
+        rig.pitch = pitch;
+    }
+    *done = true;
+}
+
+/// Parks one of every archetype in a row and frames them.
+///
+/// Anchored to the car the world guarantees at the player's start, because that
+/// is a spot the generator has already established is a street rather than the
+/// inside of a building.
+fn line_up_showroom(
+    mut commands: Commands,
+    request: Res<CaptureRequest>,
+    mut done: Local<bool>,
+    assets: Option<Res<crate::vehicle::spawn::VehicleAssets>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    vehicles: Query<&Transform, (With<Vehicle>, Without<CameraRig>)>,
+    mut cameras: Query<(&mut Transform, &mut CameraRig)>,
+) {
+    if *done || !request.showroom {
+        return;
+    }
+    let (Some(assets), Some(anchor)) = (
+        assets,
+        vehicles
+            .iter()
+            .min_by(|a, b| {
+                a.translation
+                    .length_squared()
+                    .total_cmp(&b.translation.length_squared())
+            })
+            .copied(),
+    ) else {
+        return;
+    };
+
+    let classes = crate::vehicle::spec::VehicleClass::ALL;
+    let spacing = 6.2;
+    for (i, class) in classes.iter().enumerate() {
+        let spec = class.spec();
+        let along = anchor.forward() * (i as f32 * spacing);
+        let at = anchor.translation + along;
+        let transform =
+            Transform::from_xyz(at.x, crate::vehicle::spawn::resting_height(&spec), at.z)
+                .with_rotation(anchor.rotation);
+        crate::vehicle::spawn::spawn_vehicle(
+            &mut commands,
+            &assets,
+            &mut materials,
+            spec,
+            transform,
+        );
+    }
+
+    // Off to one side and slightly up, far enough back that the row is not all
+    // perspective.
+    let middle = anchor.translation + anchor.forward() * (classes.len() as f32 * spacing * 0.5);
+    let eye = middle + *anchor.right() * 15.0 + Vec3::Y * 6.0 - anchor.forward() * 6.0;
+
+    for (mut transform, mut rig) in &mut cameras {
+        rig.mode = CameraMode::Free;
+        *transform = Transform::from_translation(eye).looking_at(middle + Vec3::Y * 0.4, Vec3::Y);
         let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
         rig.yaw = yaw;
         rig.pitch = pitch;

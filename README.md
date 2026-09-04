@@ -107,6 +107,7 @@ cargo run -- --screenshot shots/map.png    --follow --map
 | `--at-node N` | Stand at road junction N, looking down the street |
 | `--at-car` | Frame the nearest parked car, three-quarters on |
 | `--damage F` | Beat that car up first, 0 to 1 |
+| `--showroom` | Park one of every archetype in a row and shoot it |
 | `--eye H` | Eye height for `--at-node` |
 | `--follow` | Use the real third-person camera |
 | `--drive` | Take the nearest car and drive it (also logs telemetry) |
@@ -154,9 +155,10 @@ vehicle recognisable, and that makes it a table of numbers per archetype rather
 than a modelling job. Sections are normalised and scaled by the spec's
 half-extents, so resizing a car reshapes its body without redrawing it.
 
-The shapes are archetypes, not reproductions: a saloon, a mid-engined wedge, a
-box van. Copying a real car's lines would mean copying design its manufacturer
-protects, and an archetype reads faster anyway.
+The shapes are archetypes, not reproductions: a saloon, a long-bonnet coupé, a
+mid-engined wedge, a pickup, a box van and a cruiser. Copying a real car's lines
+would mean copying design its manufacturer protects, and an archetype reads
+faster anyway — it is the idea of the car rather than one example of it.
 
 Wheels are surfaces of revolution with the tread and the spokes painted on and
 normal-mapped rather than modelled — geometry that fine is a blur above walking
@@ -197,10 +199,8 @@ pursuit, and everything but the player's own car is positioned in the world.
 - Roads have no markings: no lane lines, no crossings, no junction paint.
 - Facades are procedural, so walls read as materials rather than photographs.
   Scanning them needs a custom material with a detail UV; see above.
-- Vehicle bodywork is lofted from cross-sections, and the sections still need
-  tuning: the saloon reads rounder and more bulbous than it should, and there
-  are no arches, because raising a lofted ring's floor raises it across the
-  whole car rather than over one wheel.
+- Bodywork has no crease lines. The cross-sections give a shoulder that turns
+  quickly, which reads as one, but nothing in the mesh is a hard edge.
 - Damage does not change how a car collides: dents move metal, never the box
   the physics uses. Rebuilding a convex hull per impact is the alternative.
 - There is one scanned set per surface, so a whole district paves identically.

@@ -77,28 +77,23 @@ pub fn build_assets(
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
 ) -> VehicleAssets {
-    let bodies = [
-        VehicleClass::Sedan,
-        VehicleClass::Sports,
-        VehicleClass::Truck,
-        VehicleClass::Police,
-    ]
-    .into_iter()
-    .map(|class| {
-        let built = super::body::build(class, &class.spec());
-        // Normal maps need a tangent basis, and mikktspace is the one the
-        // shader agrees with.
-        let mut add = |mesh| meshes.add(crate::world::buildings::with_tangents(mesh));
-        (
-            class,
-            BodyHandles {
-                shell: add(built.shell),
-                lower: add(built.lower),
-                cabin: built.cabin.map(&mut add),
-            },
-        )
-    })
-    .collect();
+    let bodies = VehicleClass::ALL
+        .into_iter()
+        .map(|class| {
+            let built = super::body::build(class, &class.spec());
+            // Normal maps need a tangent basis, and mikktspace is the one the
+            // shader agrees with.
+            let mut add = |mesh| meshes.add(crate::world::buildings::with_tangents(mesh));
+            (
+                class,
+                BodyHandles {
+                    shell: add(built.shell),
+                    lower: add(built.lower),
+                    cabin: built.cabin.map(&mut add),
+                },
+            )
+        })
+        .collect();
 
     VehicleAssets {
         bodies,
