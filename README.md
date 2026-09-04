@@ -213,7 +213,6 @@ pursuit, and everything but the player's own car is positioned in the world.
 - Pedestrians cross roads wherever their route turns, rather than at crossings.
 - Traffic has no right-of-way rules at junctions; it brakes for obstacles only.
 - Vehicle damage is not visually modelled — cars are wrecked, not deformed.
-- Roads have no markings: no lane lines, no crossings, no junction paint.
 - Facades are procedural, so walls read as materials rather than photographs.
   Scanning them needs a custom material with a detail UV; see above.
 - Bodywork has no crease lines. The cross-sections give a shoulder that turns

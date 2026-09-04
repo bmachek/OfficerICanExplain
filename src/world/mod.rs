@@ -3,6 +3,7 @@
 pub mod buildings;
 pub mod citygen;
 pub mod facade;
+pub mod markings;
 pub mod material;
 pub mod roadgraph;
 pub mod streaming;
@@ -63,6 +64,11 @@ fn generate_city(
     let city = City(layout);
     commands.insert_resource(streaming::ChunkIndex::build(&city));
     commands.insert_resource(city);
+    commands.insert_resource(markings::build_assets(
+        &mut meshes,
+        &mut materials,
+        &mut images,
+    ));
     commands.insert_resource(buildings::build_assets(
         &mut meshes,
         &mut materials,
