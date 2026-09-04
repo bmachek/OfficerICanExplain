@@ -22,6 +22,7 @@ pub mod stream {
     /// Waveform synthesis. Not world state, but the same reproducibility
     /// argument applies: a sound should not change between runs.
     pub const AUDIO: u64 = 7;
+    pub const RAIN: u64 = 8;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

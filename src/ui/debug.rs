@@ -73,6 +73,10 @@ fn tuning_panel(
             ui.add(egui::Slider::new(&mut config.audio.ambience, 0.0..=1.5).text("ambience"));
 
             ui.separator();
+            ui.label(egui::RichText::new("weather").strong());
+            ui.add(egui::Slider::new(&mut config.world.wetness, 0.0..=1.0).text("wetness"));
+
+            ui.separator();
             ui.label(egui::RichText::new("input").strong());
             if let Ok(action_state) = actions.single() {
                 let movement = action_state.clamped_axis_pair(&Action::Move);

@@ -25,6 +25,12 @@ pub struct WorldConfig {
     /// Real seconds for a full 24h cycle. 0 freezes the clock.
     pub day_length_seconds: f32,
     pub start_hour: f32,
+    /// How wet the ground is, 0 to 1. Above about a third it also rains.
+    ///
+    /// A dial rather than a simulation: deciding *when* it rains is a separate
+    /// job from being able to show it, and a screenshot needs the weather to
+    /// hold still.
+    pub wetness: f32,
 }
 
 /// The mixer. Three numbers rather than one, because the background bed and
@@ -56,6 +62,7 @@ impl Default for GameConfig {
                 stream_radius: 900.0,
                 day_length_seconds: 600.0,
                 start_hour: 9.5,
+                wetness: 0.0,
             },
             camera: CameraConfig {
                 speed: 25.0,

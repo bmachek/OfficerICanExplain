@@ -70,6 +70,8 @@ pub struct CaptureRequest {
     /// Lines one of every archetype up down the street and shoots the row.
     /// The only way to compare bodywork without hunting the city for a pickup.
     pub showroom: bool,
+    /// Soaks the ground, 0 to 1. Above about a third it also rains.
+    pub wetness: f32,
     /// Puts the player in the nearest car and holds the throttle down.
     /// An end-to-end smoke test of enter -> drive -> chase camera that needs
     /// nobody at the keyboard.
@@ -132,6 +134,9 @@ pub fn parse_args() -> Option<CaptureRequest> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0),
         showroom: args.iter().any(|a| a == "--showroom"),
+        wetness: value_of("--wet")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0),
         follow: args.iter().any(|a| a == "--follow"),
         drive: args.iter().any(|a| a == "--drive"),
         map: args.iter().any(|a| a == "--map"),
@@ -179,6 +184,9 @@ fn apply_capture_overrides(
     }
     if request.map {
         map_open.0 = true;
+    }
+    if request.wetness > 0.0 {
+        config.world.wetness = request.wetness;
     }
     if let Some(hour) = request.hour {
         config.world.start_hour = hour;

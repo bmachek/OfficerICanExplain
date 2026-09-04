@@ -11,6 +11,7 @@ pub mod streaming;
 pub mod streetlights;
 pub mod texture;
 pub mod timeofday;
+pub mod weather;
 
 use avian3d::prelude::*;
 use bevy::math::Affine2;
@@ -30,6 +31,7 @@ impl Plugin for WorldPlugin {
             PhysicsPlugins::default(),
             material::MaterialLibraryPlugin,
             facade::FacadePlugin,
+            weather::WeatherPlugin,
             timeofday::TimeOfDayPlugin,
             streetlights::StreetLightPlugin,
         ))
@@ -49,6 +51,7 @@ fn generate_city(
     mut images: ResMut<Assets<Image>>,
     library: Res<material::MaterialLibrary>,
     mut facades: ResMut<Assets<facade::FacadeMaterial>>,
+    mut wet: ResMut<weather::WetSurfaces>,
 ) {
     let started = std::time::Instant::now();
     let layout = citygen::generate(config.world_seed, config.world.half_extent);
@@ -77,6 +80,7 @@ fn generate_city(
         &mut images,
         &library,
         &mut facades,
+        &mut wet,
     ));
 }
 
@@ -103,6 +107,7 @@ fn setup_ground(
     mut commands: Commands,
     config: Res<GameConfig>,
     library: Res<material::MaterialLibrary>,
+    mut wet: ResMut<weather::WetSurfaces>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -118,7 +123,13 @@ fn setup_ground(
         Mesh3d(meshes.add(buildings::with_tangents(
             Plane3d::default().mesh().size(size, size).build(),
         ))),
-        MeshMaterial3d(materials.add(road_material(&library, images.as_mut(), size))),
+        MeshMaterial3d({
+            let asphalt = road_material(&library, images.as_mut(), size);
+            let (dry_color, dry_roughness) = (asphalt.base_color, asphalt.perceptual_roughness);
+            let handle = materials.add(asphalt);
+            wet.add(handle.clone(), dry_color, dry_roughness);
+            handle
+        }),
     ));
     commands.spawn((
         Name::new("Ground collider"),

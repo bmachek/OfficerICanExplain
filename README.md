@@ -18,6 +18,7 @@ generator; nothing here is authored by hand.
 |---|---|
 | ![Street level](shots/m1-street.png) | ![Night](shots/m1-night.png) |
 | ![Driving](shots/m3-driving.png) | ![Bodywork](shots/m3-cars.png) |
+| ![Rain](shots/m1-rain.png) | ![Dusk](shots/m1-dusk.png) |
 
 ## Running
 
@@ -108,6 +109,7 @@ cargo run -- --screenshot shots/map.png    --follow --map
 | `--at-car` | Frame the nearest parked car, three-quarters on |
 | `--damage F` | Beat that car up first, 0 to 1 |
 | `--showroom` | Park one of every archetype in a row and shoot it |
+| `--wet F` | Soak the ground, 0 to 1; above a third it rains |
 | `--eye H` | Eye height for `--at-node` |
 | `--follow` | Use the real third-person camera |
 | `--drive` | Take the nearest car and drive it (also logs telemetry) |
@@ -164,6 +166,24 @@ plane the wall lies in — there is no diagonal face for a triplanar blend's
 seams to show up on. Glass is masked out by metalness, which the facade's own
 surface map already carries.
 
+## Weather
+
+Rain is two things, and the second is the one that matters. Falling rain is a
+few thousand streaks kept in a box around the camera, wrapped rather than
+respawned. *Wet ground* is what changes the picture: soaked asphalt goes darker
+and far glossier, and at the grazing angles a street is actually seen from it
+stops being a surface and starts being a mirror for the sky and every lit window
+above it.
+
+That mirror comes free — the camera already carries an environment map generated
+from the atmosphere, so dropping the road's roughness is enough. Screen-space
+reflections would be sharper, but Bevy only runs those in a deferred pipeline,
+and this renderer is forward: the facade material's own fragment shader and the
+cars' clearcoat both live there.
+
+Wetness is a dial (`--wet`, or the dev panel), not a simulation. Deciding when
+it rains is a separate job from being able to show it.
+
 ## Vehicles
 
 Bodywork is lofted: each archetype is a handful of cross-sections along the
@@ -210,6 +230,9 @@ Engine pitch follows the drivetrain, sirens and beacons come on with the
 pursuit, and everything but the player's own car is positioned in the world.
 
 ## Known limitations
+
+- Weather is a dial rather than a system: nothing decides when it rains, and
+  nothing dries out.
 
 - Pedestrians cross roads wherever their route turns, rather than at crossings.
 - Traffic has no right-of-way rules at junctions; it brakes for obstacles only.

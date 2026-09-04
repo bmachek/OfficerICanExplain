@@ -203,6 +203,7 @@ pub fn build_assets(
     images: &mut Assets<Image>,
     library: &super::material::MaterialLibrary,
     facades_out: &mut Assets<super::facade::FacadeMaterial>,
+    wet: &mut super::weather::WetSurfaces,
 ) -> CityAssets {
     let districts = [
         District::Downtown,
@@ -279,7 +280,12 @@ pub fn build_assets(
                 slabs.perceptual_roughness = 0.95;
             }
         }
-        paving.push(materials.add(slabs));
+        let (dry_color, dry_roughness) = (slabs.base_color, slabs.perceptual_roughness);
+        let handle = materials.add(slabs);
+        // Pavements soak like the road does. Grass does not — wet grass is
+        // darker but no glossier, and the shine is the whole point here.
+        wet.add(handle.clone(), dry_color, dry_roughness);
+        paving.push(handle);
 
         let mut lawn = StandardMaterial {
             uv_transform,
