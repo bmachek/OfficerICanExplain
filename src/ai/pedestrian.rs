@@ -56,6 +56,9 @@ pub struct Pedestrian {
     /// Counts down while fleeing; keeps them running a moment after the danger
     /// passes rather than snapping back to a stroll.
     pub panic: f32,
+    /// Metres per second this frame. Read by the walk cycle, which paces the
+    /// stride off distance covered rather than off time.
+    pub current_speed: f32,
 }
 
 #[derive(Resource)]
@@ -72,7 +75,6 @@ impl Default for PedestrianTimer {
 
 #[derive(Resource)]
 struct PedestrianAssets {
-    body: Handle<Mesh>,
     clothes: Vec<Handle<StandardMaterial>>,
 }
 
@@ -84,7 +86,13 @@ impl Plugin for PedestrianPlugin {
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
-                (maintain_population, walk_pavements)
+                (
+                    maintain_population,
+                    walk_pavements,
+                    super::figure::pace_pedestrians,
+                    super::figure::pace_player,
+                    super::figure::animate,
+                )
                     .chain()
                     .in_set(GameSet::Ai),
             );
@@ -110,11 +118,8 @@ fn setup(
         Color::srgb(0.20, 0.22, 0.26),
         Color::srgb(0.42, 0.38, 0.52),
     ];
+    commands.insert_resource(super::figure::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(PedestrianAssets {
-        body: meshes.add(Capsule3d {
-            radius: RADIUS,
-            half_length: HEIGHT * 0.5,
-        }),
         clothes: palette
             .into_iter()
             .map(|color| {
@@ -142,6 +147,7 @@ fn maintain_population(
     mut timer: ResMut<PedestrianTimer>,
     city: Res<City>,
     assets: Res<PedestrianAssets>,
+    figures: Res<super::figure::FigureAssets>,
     mut rng: ResMut<PedestrianRng>,
     players: Query<&Transform, With<Player>>,
     pedestrians: Query<(Entity, &Transform), With<Pedestrian>>,
@@ -198,7 +204,7 @@ fn maintain_population(
         let position = pavement_point(a, b, edge.width, side, t);
         let material = assets.clothes[rng.0.random_range(0..assets.clothes.len())].clone();
 
-        commands.spawn((
+        let mut person = commands.spawn((
             Name::new("Pedestrian"),
             Pedestrian {
                 from,
@@ -206,9 +212,8 @@ fn maintain_population(
                 side,
                 speed: rng.0.random_range(1.1..1.9),
                 panic: 0.0,
+                current_speed: 0.0,
             },
-            Mesh3d(assets.body.clone()),
-            MeshMaterial3d(material),
             Transform::from_xyz(
                 position.x,
                 SIDEWALK_HEIGHT + HEIGHT * 0.5 + RADIUS,
@@ -220,7 +225,9 @@ fn maintain_population(
             LockedAxes::ROTATION_LOCKED,
             crate::combat::health::Health::new(40.0),
             crate::crime::wanted::Witness,
+            Visibility::default(),
         ));
+        super::figure::dress(&mut person, &figures, material, &mut rng.0);
         alive += 1;
     }
 }
@@ -308,6 +315,7 @@ fn walk_pavements(
             pedestrian.speed.min(WALK_SPEED * 1.3)
         };
 
+        pedestrian.current_speed = if heading == Vec2::ZERO { 0.0 } else { speed };
         let step = heading * speed * dt;
         transform.translation.x += step.x;
         transform.translation.z += step.y;

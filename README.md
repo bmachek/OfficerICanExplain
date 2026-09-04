@@ -3,8 +3,10 @@
 An original open-world crime sandbox, built in Rust with Bevy.
 
 An original work, not affiliated with anyone: the city, vehicles, pedestrians
-and police are all generated procedurally at runtime, and no third-party
-assets, trademarks or IP are used.
+and police are all generated procedurally at runtime, and no trademarks or
+third-party IP are used. The sound is synthesised at startup from a seed. The
+surface materials are scanned PBR sets under CC0 — public domain — fetched by a
+script and never checked in.
 
 ![The city from above](shots/m1-aerial.png)
 
@@ -15,15 +17,21 @@ generator; nothing here is authored by hand.
 | | |
 |---|---|
 | ![Street level](shots/m1-street.png) | ![Night](shots/m1-night.png) |
-| ![Driving](shots/m3-driving.png) | ![HUD and minimap](shots/m6-hud.png) |
+| ![Driving](shots/m3-driving.png) | ![Bodywork](shots/m3-cars.png) |
+| ![Rain](shots/m1-rain.png) | ![Dusk](shots/m1-dusk.png) |
 
 ## Running
 
 ```sh
+tools/fetch-materials.sh  # ~200 MB of CC0 textures; optional, see below
 cargo run                 # first build takes a few minutes; then ~2-10s
 cargo run --release       # smoother, slower to compile
 cargo run --features dev  # dynamic linking, fastest iteration
 ```
+
+The material download is optional. Without it every surface falls back to the
+procedural texture it shipped with, and the game runs exactly the same — it
+just looks worse. Nothing is checked in and nothing is required to build.
 
 ## Controls
 
@@ -56,15 +64,17 @@ following and start ramming.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, tunables, deterministic RNG, screenshot tool |
-| `world` | City generator, road graph, chunk streaming, day/night, street lights |
+| `world` | City generator, road graph, chunk streaming, day/night, lights, street furniture |
 | `player` | Input mapping, character controller, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, damage, parked-car spawning |
-| `ai` | Traffic, pedestrians, police pursuit, shared steering |
+| `ai` | Traffic, pedestrians, police pursuit, shared steering, walk cycles |
 | `crime` | Crime kinds, witnesses, the wanted level |
 | `combat` | Health, armour, hitscan weapons |
 | `mission` | Objective state machine, mission chain, money |
 | `ui` | HUD, minimap, dev tuning panel |
 | `save` | RON quick save / load |
+| `render` | Atmosphere, exposure, bloom, ambient occlusion, anti-aliasing |
+| `audio` | Sound synthesis, the sound bank, and what triggers what |
 
 The world is fully reproducible from `GameConfig::world_seed`, so a save stores
 only what cannot be derived: position, money, health, heat and mission progress.
@@ -96,6 +106,10 @@ cargo run -- --screenshot shots/map.png    --follow --map
 |---|---|
 | `--at x,y,z` / `--look x,y,z` | Camera pose |
 | `--at-node N` | Stand at road junction N, looking down the street |
+| `--at-car` | Frame the nearest parked car, three-quarters on |
+| `--damage F` | Beat that car up first, 0 to 1 |
+| `--showroom` | Park one of every archetype in a row and shoot it |
+| `--wet F` | Soak the ground, 0 to 1; above a third it rains |
 | `--eye H` | Eye height for `--at-node` |
 | `--follow` | Use the real third-person camera |
 | `--drive` | Take the nearest car and drive it (also logs telemetry) |
@@ -104,9 +118,153 @@ cargo run -- --screenshot shots/map.png    --follow --map
 | `--stream-radius M` | Load more of the city than a player would |
 | `--frames N` | Frames to render before capturing |
 
+## Textures
+
+Surfaces come from photogrammetry: `tools/fetch-materials.sh` pulls ten scanned
+PBR sets from [ambientCG](https://ambientcg.com), all released under CC0, into
+`assets/materials/`. `world::material` loads them — colour through sRGB, the
+rest linear — builds each one a mip chain on the CPU, because Bevy has no
+runtime mip generator and a 2K texture tiled across a road without one does not
+shimmer so much as boil, and hands them a tiling anisotropic sampler.
+
+Anything missing falls back. Every lookup returns an `Option` and the caller
+paints its own; a fresh clone with no download still starts.
+
+Structure stays procedural, because no scan can supply it. Every material is
+painted into an `Image` at startup by `world::texture` —
+value noise, fBm and ridged noise, plus a few deliberate shapes. Facades are
+the interesting case: the window grid is drawn per building class (house,
+low-rise, mid-rise, tower) so a tower gets curtain-wall glazing and a house
+gets four panes and a door, rather than one texture stretched over both.
+
+Each facade produces four maps from one pass — colour, a metallic-roughness
+pack so the glass is glossy and the wall is not, a tangent-space normal map so
+the panes are genuinely recessed, and an emissive mask marking which windows
+are lit. `timeofday` ramps the emissive strength, which is why the city fills
+with light at dusk without a single extra light source.
+
+Facades get both. The painted texture holds what is *about* the building —
+where the windows are, which are lit, where the floor lines fall — and a
+scanned brick or concrete grain is sampled on top of it in **world space**,
+through `assets/shaders/facade.wgsl`. Sampling in world space rather than in
+the mesh's UV is what makes it work: the grain's scale belongs to the world, so
+a two-storey house and a forty-storey tower share one material. Anchoring it to
+the building instead would need a size bucket per material and take the city
+from twenty-odd draw calls to several hundred.
+
+Variety comes from combination rather than from count. Each district names four
+walls — a residential street is brick, brick, older brick and render; an
+industrial one is concrete with brick warehouses in it — and each is then
+dressed at a different scale, with half turned a quarter turn. Scale is the
+strongest lever, because what the eye measures is the course height against the
+storey. All of it lands in a material that had to exist anyway, so the city's
+material count does not move.
+
+The shader picks one projection rather than blending three. Every wall in this
+city stands on the street grid, so the dominant axis of the normal *is* the
+plane the wall lies in — there is no diagonal face for a triplanar blend's
+seams to show up on. Glass is masked out by metalness, which the facade's own
+surface map already carries.
+
+## People
+
+A pedestrian was a capsule, which reads as a person at fifty metres and as a
+bollard at five — and five metres is where pedestrians matter, because they are
+the witnesses, the victims and the crowd that scatters when a car mounts the
+kerb. They are now figures: torso, head, two arms, two legs, hung off the same
+entity the capsule collider is still on. Nothing about the physics or the
+line-of-sight checks changed.
+
+Limbs pivot at the joint rather than at their centre, which is why each is an
+entity at the shoulder or hip with its mesh hung below it — rotating a centred
+capsule swings it about its middle, and a leg that does that is not walking.
+The stride is paced by distance covered rather than by time, so running takes
+faster steps instead of longer ones. The player wears the same figure.
+
+## Weather
+
+Rain is two things, and the second is the one that matters. Falling rain is a
+few thousand streaks kept in a box around the camera, wrapped rather than
+respawned. *Wet ground* is what changes the picture: soaked asphalt goes darker
+and far glossier, and at the grazing angles a street is actually seen from it
+stops being a surface and starts being a mirror for the sky and every lit window
+above it.
+
+That mirror comes free — the camera already carries an environment map generated
+from the atmosphere, so dropping the road's roughness is enough. Screen-space
+reflections would be sharper, but Bevy only runs those in a deferred pipeline,
+and this renderer is forward: the facade material's own fragment shader and the
+cars' clearcoat both live there.
+
+Wetness is a dial (`--wet`, or the dev panel), not a simulation. Deciding when
+it rains is a separate job from being able to show it.
+
+## Vehicles
+
+Bodywork is lofted: each archetype is a handful of cross-sections along the
+car's length — where the bonnet drops, how far the screen is raked, how much of
+the length the cabin takes — skinned into a mesh. A silhouette is what makes a
+vehicle recognisable, and that makes it a table of numbers per archetype rather
+than a modelling job. Sections are normalised and scaled by the spec's
+half-extents, so resizing a car reshapes its body without redrawing it.
+
+The shapes are archetypes, not reproductions: a saloon, a long-bonnet coupé, a
+mid-engined wedge, a pickup, a box van and a cruiser. Copying a real car's lines
+would mean copying design its manufacturer protects, and an archetype reads
+faster anyway — it is the idea of the car rather than one example of it.
+
+Each archetype carries a beltline: above a stated height the shell steps in by
+four percent, and that step is the crease line down the flank that every pressed
+panel has. It has to be put there rather than found — sampled at twenty-eight
+points, the sharpest corner on a saloon's cross-section is twenty-three degrees,
+spread over several of them, so there is no edge in the shape to detect. The two
+ring points straddling the belt are pinned to it, which turns the step into a
+right angle no amount of tessellation can soften, and `split_creases` then
+duplicates the vertices along it so smoothing stops averaging across the fold.
+
+Wheels are surfaces of revolution with the tread and the spokes painted on and
+normal-mapped rather than modelled — geometry that fine is a blur above walking
+pace.
+
+Paint comes from a weighted palette: mostly white, silver, grey and black, with
+the occasional colour, because an evenly sampled rainbow reads as a toy box and
+it is the proportion of dull cars that makes the red one feel deliberate. Each
+colour carries its own flake content, and it goes on under a clearcoat.
+
+Crashes beat the metal in. The first real impact copies that car's panels off
+the archetype's shared mesh — everything else keeps batching — and pushes a
+dent into them along the direction the blow arrived from. The lacquer dulls, the
+flake stops reading, and past about a third gone the colour cooks off towards
+soot; below thirty percent it smokes.
+
+## Audio
+
+There are no sound files either. `audio::synth` is a small DSP kit — partials,
+noise, one-pole filters, resonators, envelopes — and `audio::bank` writes every
+sound in the game as an expression in it: a gunshot is a crack plus a muzzle
+blast plus the street answering back. The buffers are computed once at startup
+and played through a custom Bevy audio source.
+
+Loops are built to be seamless by construction rather than by crossfading: the
+engine and the ambience are sums of harmonics of the loop frequency, so the
+waveform is exactly periodic, and the siren's sweep is tuned so its accumulated
+phase closes at the loop point.
+
+Engine pitch follows the drivetrain, sirens and beacons come on with the
+pursuit, and everything but the player's own car is positioned in the world.
+
 ## Known limitations
+
+- Weather is a dial rather than a system: nothing decides when it rains, and
+  nothing dries out.
 
 - Pedestrians cross roads wherever their route turns, rather than at crossings.
 - Traffic has no right-of-way rules at junctions; it brakes for obstacles only.
 - Vehicle damage is not visually modelled — cars are wrecked, not deformed.
-- No audio yet.
+- Facades are procedural, so walls read as materials rather than photographs.
+  Scanning them needs a custom material with a detail UV; see above.
+- Six wall sets across five districts, so a long enough walk repeats. What
+  breaks the repeat is combination, not count — see above.
+- Damage does not change how a car collides: dents move metal, never the box
+  the physics uses. Rebuilding a convex hull per impact is the alternative.
+

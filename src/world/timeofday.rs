@@ -11,6 +11,11 @@ use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
 
 use crate::core::config::GameConfig;
+use crate::world::buildings::CityAssets;
+
+/// How bright a lit window is at full dark, in the nits `emissive` is measured
+/// in — the same scale the tracer and explosion flashes use.
+const WINDOW_GLOW: f32 = 3.0;
 
 #[derive(Resource, Debug, Clone)]
 pub struct TimeOfDay {
@@ -29,10 +34,16 @@ pub fn sun_elevation(hours: f32) -> f32 {
 }
 
 /// 0 at night, 1 in full day, with a soft ramp through twilight.
+///
+/// The ramp starts *below* the horizon deliberately. Sunset is not the end of
+/// daylight — civil twilight is another six degrees of it, and the sky stays
+/// bright through all of them. Clamping at zero elevation made the city snap
+/// from lit to black over about a second of wall clock.
 pub fn daylight(hours: f32) -> f32 {
-    let e = sun_elevation(hours);
-    // Smoothstep over the first 15 degrees or so of elevation.
-    (e / 0.25).clamp(0.0, 1.0).powf(0.6)
+    // -0.11 is roughly six degrees below the horizon; 0.25 is fifteen above.
+    ((sun_elevation(hours) + 0.11) / 0.36)
+        .clamp(0.0, 1.0)
+        .powf(0.6)
 }
 
 fn sky_color(hours: f32) -> Color {
@@ -59,12 +70,25 @@ fn sun_color(hours: f32) -> Color {
     Color::srgb(c.x, c.y, c.z)
 }
 
+/// Colour the far edge of the streamed world fades into.
+///
+/// Not the same value as [`sky_color`], and the difference matters. Fog is
+/// mixed into the shaded output *after* exposure, while the sky is radiance the
+/// camera meters — so quoting the sky's own brightness here paints a milky band
+/// noticeably brighter than the sky behind it.
+fn fog_color(hours: f32) -> Color {
+    let sky = LinearRgba::from(sky_color(hours));
+    LinearRgba::rgb(sky.red * 0.42, sky.green * 0.42, sky.blue * 0.44).into()
+}
+
 pub struct TimeOfDayPlugin;
 
 impl Plugin for TimeOfDayPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_sun)
-            .add_systems(Update, (attach_fog, advance_clock, apply_sky).chain());
+        app.add_systems(Startup, spawn_sun).add_systems(
+            Update,
+            (attach_fog, advance_clock, apply_sky, light_windows).chain(),
+        );
     }
 }
 
@@ -81,6 +105,9 @@ fn spawn_sun(mut commands: Commands, config: Res<GameConfig>) {
             shadow_maps_enabled: true,
             ..default()
         },
+        // A sun to actually look at, drawn into the atmosphere at the light's
+        // own direction and angular size.
+        bevy::light::SunDisk::EARTH,
         Transform::default(),
     ));
 }
@@ -124,10 +151,12 @@ fn apply_sky(
 
     clear.0 = sky;
 
-    // Ambient carries the night: without a floor, unlit faces go pure black and
-    // the city becomes unreadable rather than dark.
+    // Ambient is now only a floor. Daytime sky light comes from the atmosphere's
+    // environment map, which is directional and coloured and does the job
+    // properly; this exists so that at night an unlit face is dark rather than
+    // pure black, and the city stays readable.
     ambient.color = Color::srgb(0.35 + 0.30 * day, 0.42 + 0.30 * day, 0.58 + 0.22 * day);
-    ambient.brightness = 180.0 + 1_750.0 * day;
+    ambient.brightness = 180.0 + 260.0 * day;
 
     let angle = (hours - 6.0) / 12.0 * PI;
     let distance = 400.0;
@@ -146,19 +175,58 @@ fn apply_sky(
             position
         };
         *transform = Transform::from_translation(eye).looking_at(Vec3::ZERO, Vec3::Y);
-        light.illuminance = 300.0 + 12_500.0 * day;
+        // Lux, for real. Direct sunlight is about a hundred thousand of them,
+        // and the camera is metered for exactly that — see `render`.
+        light.illuminance = 300.0 + 110_000.0 * day;
         light.color = sun_color(hours);
     }
 
-    // Fog fades the far edge of the streamed area, so chunks pop in inside
-    // haze instead of appearing out of clear air.
+    // Fog hides the far edge of the streamed area, so chunks pop in inside haze
+    // instead of appearing out of clear air. It is a tight band right at that
+    // edge and nothing more: the atmosphere's aerial perspective already does
+    // the honest middle-distance haze, and stacking a second one over it turned
+    // every long street into smog.
     let far = config.world.stream_radius;
+    let haze = fog_color(hours);
     for mut f in &mut fog {
-        f.color = sky;
+        f.color = haze;
         f.falloff = FogFalloff::Linear {
-            start: far * 0.62,
-            end: far * 1.25,
+            start: far * 0.80,
+            end: far * 1.02,
         };
+    }
+}
+
+/// Turns the city's windows on after dark.
+///
+/// *Which* windows are lit is baked into each facade's emissive mask and never
+/// changes; only the strength moves. So a whole skyline coming up at dusk costs
+/// one pass over the eighty facade materials, not anything per building.
+///
+/// The threshold matters: writing to a material re-uploads its uniform, and a
+/// continuous day/night ramp would otherwise re-upload all eighty every frame
+/// for a change too small to see.
+fn light_windows(
+    clock: Res<TimeOfDay>,
+    assets: Option<Res<CityAssets>>,
+    mut materials: ResMut<Assets<crate::world::facade::FacadeMaterial>>,
+    mut applied: Local<Option<f32>>,
+) {
+    // The city is generated a frame or two before this first runs.
+    let Some(assets) = assets else { return };
+
+    let level = 1.0 - daylight(clock.hours);
+    if applied.is_some_and(|last: f32| (last - level).abs() < 0.01) {
+        return;
+    }
+    *applied = Some(level);
+
+    // White, because the mask carries each window's own colour.
+    let glow = level * WINDOW_GLOW;
+    for handle in assets.building_materials() {
+        if let Some(mut material) = materials.get_mut(handle) {
+            material.base.emissive = LinearRgba::rgb(glow, glow, glow);
+        }
     }
 }
 
@@ -172,6 +240,15 @@ mod tests {
         assert!(sun_elevation(0.0) < -0.99);
         assert!(sun_elevation(6.0).abs() < 1e-5);
         assert!(sun_elevation(18.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn windows_are_lit_at_night_and_dark_at_noon() {
+        assert_eq!((1.0 - daylight(12.0)) * WINDOW_GLOW, 0.0);
+        assert_eq!((1.0 - daylight(1.0)) * WINDOW_GLOW, WINDOW_GLOW);
+        // And they come up through dusk rather than snapping on.
+        let dusk = 1.0 - daylight(17.5);
+        assert!(dusk > 0.0 && dusk < 1.0, "dusk should be partial: {dusk}");
     }
 
     #[test]

@@ -22,16 +22,19 @@
 #![allow(clippy::too_many_arguments)]
 
 mod ai;
+mod audio;
 mod combat;
 mod core;
 mod crime;
 mod mission;
 mod player;
+mod render;
 mod save;
 mod ui;
 mod vehicle;
 mod world;
 
+use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::window::PresentMode;
 
@@ -40,25 +43,36 @@ pub const GAME_TITLE: &str = "Officer, I Can Explain";
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: GAME_TITLE.into(),
-                resolution: (1600, 900).into(),
-                present_mode: PresentMode::AutoVsync,
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: GAME_TITLE.into(),
+                        resolution: (1600, 900).into(),
+                        present_mode: PresentMode::AutoVsync,
+                        ..default()
+                    }),
+                    ..default()
+                })
+                // Told explicitly, because Bevy would otherwise look for
+                // `assets/` beside the binary. See `core::assets`.
+                .set(AssetPlugin {
+                    file_path: crate::core::assets::root().to_string_lossy().into_owned(),
+                    ..default()
+                }),
+        )
         // Needed before `CorePlugin`, whose capture overrides may set it.
         .init_resource::<crate::ui::minimap::MapOpen>()
         .add_plugins((
             crate::core::CorePlugin,
             crate::ai::AiPlugin,
+            crate::audio::AudioPlugin,
             crate::crime::CrimePlugin,
             crate::combat::CombatPlugin,
             crate::mission::MissionPlugin,
             crate::save::SavePlugin,
             crate::player::PlayerPlugin,
+            crate::render::RenderPlugin,
             crate::world::WorldPlugin,
             crate::vehicle::VehiclePlugin,
             crate::ui::UiPlugin,

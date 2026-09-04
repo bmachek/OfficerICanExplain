@@ -58,6 +58,20 @@ pub struct CaptureRequest {
     pub follow: bool,
     /// Opens the full-screen map.
     pub map: bool,
+    /// Poses the camera three-quarters on to the nearest parked car.
+    ///
+    /// Bodywork is the one thing a street-level shot never shows properly: from
+    /// the pavement a car is a silhouette, and from behind the wheels are
+    /// hidden by its own bumper. Judging a body change needs this view.
+    pub at_car: bool,
+    /// Beats the framed car up by this fraction before shooting it, so damage
+    /// can be judged without driving into a wall at the right angle first.
+    pub damage: f32,
+    /// Lines one of every archetype up down the street and shoots the row.
+    /// The only way to compare bodywork without hunting the city for a pickup.
+    pub showroom: bool,
+    /// Soaks the ground, 0 to 1. Above about a third it also rains.
+    pub wetness: f32,
     /// Puts the player in the nearest car and holds the throttle down.
     /// An end-to-end smoke test of enter -> drive -> chase camera that needs
     /// nobody at the keyboard.
@@ -115,6 +129,14 @@ pub fn parse_args() -> Option<CaptureRequest> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1.7),
         hour: value_of("--hour").and_then(|v| v.parse().ok()),
+        at_car: args.iter().any(|a| a == "--at-car"),
+        damage: value_of("--damage")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0),
+        showroom: args.iter().any(|a| a == "--showroom"),
+        wetness: value_of("--wet")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.0),
         follow: args.iter().any(|a| a == "--follow"),
         drive: args.iter().any(|a| a == "--drive"),
         map: args.iter().any(|a| a == "--map"),
@@ -143,6 +165,7 @@ impl Plugin for CapturePlugin {
             })
             .add_systems(PreStartup, apply_capture_overrides)
             .add_systems(PostStartup, retarget_camera_offscreen)
+            .add_systems(Update, (pose_at_car, line_up_showroom))
             .add_systems(
                 FixedUpdate,
                 autodrive.before(crate::vehicle::controller::drive_vehicles),
@@ -161,6 +184,9 @@ fn apply_capture_overrides(
     }
     if request.map {
         map_open.0 = true;
+    }
+    if request.wetness > 0.0 {
+        config.world.wetness = request.wetness;
     }
     if let Some(hour) = request.hour {
         config.world.start_hour = hour;
@@ -402,4 +428,140 @@ fn autodrive(
         }
         let _ = car;
     }
+}
+
+/// Frames the nearest parked car, once the parked cars exist.
+///
+/// Deferred to `Update` rather than done with the rest of the pose because
+/// `spawn_parked_vehicles` runs in `PostStartup` alongside it, and there is no
+/// ordering between them worth asserting for a debug flag.
+fn pose_at_car(
+    request: Res<CaptureRequest>,
+    mut done: Local<bool>,
+    mut impacts: MessageWriter<crate::vehicle::damage::VehicleImpact>,
+    mut vehicles: Query<
+        (
+            Entity,
+            &Transform,
+            &mut crate::vehicle::damage::VehicleHealth,
+        ),
+        (With<Vehicle>, Without<CameraRig>),
+    >,
+    mut cameras: Query<(&mut Transform, &mut CameraRig)>,
+) {
+    if *done || !request.at_car {
+        return;
+    }
+    let nearest = vehicles
+        .iter()
+        .min_by(|a, b| {
+            a.1.translation
+                .length_squared()
+                .total_cmp(&b.1.translation.length_squared())
+        })
+        .map(|(entity, transform, _)| (entity, *transform));
+    let Some((entity, car)) = nearest else {
+        return;
+    };
+
+    if request.damage > 0.0
+        && let Ok((_, _, mut health)) = vehicles.get_mut(entity)
+    {
+        health.current = health.max * (1.0 - request.damage).max(0.01);
+        // Three blows from three sides, so the shot shows a car that has been
+        // in a fight rather than one pressed neatly on the nose.
+        for from in [
+            Vec3::new(-0.2, 0.1, -1.0).normalize(),
+            Vec3::new(1.0, 0.15, 0.3).normalize(),
+            Vec3::new(-0.7, 0.0, 0.7).normalize(),
+        ] {
+            impacts.write(crate::vehicle::damage::VehicleImpact {
+                vehicle: entity,
+                position: car.translation,
+                from,
+                severity: 18.0 * request.damage,
+            });
+        }
+    }
+
+    // Off the front three-quarter, at about eye height for someone standing
+    // beside it: the angle every car photograph is taken from, because it shows
+    // the nose, one flank and both wheels on that side at once.
+    // Far enough out that the lens is not adding drama of its own: from three
+    // metres a nose fills the frame and every proportion is a lie.
+    let eye = car.transform_point(Vec3::new(5.2, 1.75, -6.8));
+    let target = car.translation + Vec3::Y * 0.35;
+
+    for (mut transform, mut rig) in &mut cameras {
+        rig.mode = CameraMode::Free;
+        *transform = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        rig.yaw = yaw;
+        rig.pitch = pitch;
+    }
+    *done = true;
+}
+
+/// Parks one of every archetype in a row and frames them.
+///
+/// Anchored to the car the world guarantees at the player's start, because that
+/// is a spot the generator has already established is a street rather than the
+/// inside of a building.
+fn line_up_showroom(
+    mut commands: Commands,
+    request: Res<CaptureRequest>,
+    mut done: Local<bool>,
+    assets: Option<Res<crate::vehicle::spawn::VehicleAssets>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    vehicles: Query<&Transform, (With<Vehicle>, Without<CameraRig>)>,
+    mut cameras: Query<(&mut Transform, &mut CameraRig)>,
+) {
+    if *done || !request.showroom {
+        return;
+    }
+    let (Some(assets), Some(anchor)) = (
+        assets,
+        vehicles
+            .iter()
+            .min_by(|a, b| {
+                a.translation
+                    .length_squared()
+                    .total_cmp(&b.translation.length_squared())
+            })
+            .copied(),
+    ) else {
+        return;
+    };
+
+    let classes = crate::vehicle::spec::VehicleClass::ALL;
+    let spacing = 6.2;
+    for (i, class) in classes.iter().enumerate() {
+        let spec = class.spec();
+        let along = anchor.forward() * (i as f32 * spacing);
+        let at = anchor.translation + along;
+        let transform =
+            Transform::from_xyz(at.x, crate::vehicle::spawn::resting_height(&spec), at.z)
+                .with_rotation(anchor.rotation);
+        crate::vehicle::spawn::spawn_vehicle(
+            &mut commands,
+            &assets,
+            &mut materials,
+            spec,
+            transform,
+        );
+    }
+
+    // Off to one side and slightly up, far enough back that the row is not all
+    // perspective.
+    let middle = anchor.translation + anchor.forward() * (classes.len() as f32 * spacing * 0.5);
+    let eye = middle + *anchor.right() * 15.0 + Vec3::Y * 6.0 - anchor.forward() * 6.0;
+
+    for (mut transform, mut rig) in &mut cameras {
+        rig.mode = CameraMode::Free;
+        *transform = Transform::from_translation(eye).looking_at(middle + Vec3::Y * 0.4, Vec3::Y);
+        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        rig.yaw = yaw;
+        rig.pitch = pitch;
+    }
+    *done = true;
 }

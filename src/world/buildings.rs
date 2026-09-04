@@ -1,29 +1,64 @@
-//! Turning city layout data into meshes and colliders.
+//! Turning city layout data into meshes, materials and colliders.
 //!
-//! Every building and pavement slab shares ONE unit-cube mesh handle and is
-//! sized by its transform. Bevy batches entities that share a mesh *and*
-//! material handle into a single draw call, so the whole city costs roughly one
-//! draw call per material — about twenty — instead of one per building.
+//! Every building, kerb and roof shares ONE unit-cube mesh handle and is sized
+//! by its transform; every block top shares one unit quad. Bevy batches
+//! entities that share a mesh *and* material handle into a single draw call, so
+//! the city costs roughly one draw call per material rather than one per
+//! building.
+//!
+//! Texturing widens that material table, and it is worth being honest about the
+//! trade. A facade needs its window grid to match the building's height, and
+//! that is a property of the entity, not the material — so buildings are
+//! bucketed into four height classes and the table becomes
+//! `districts x palette x class`, about eighty materials instead of twenty.
+//! Eighty draw calls for an entire city is still nothing; eighty *thousand*
+//! would not be, which is why the bucket count stays small and fixed.
+//!
+//! The cube mesh is built here rather than taken from `Cuboid`, whose UVs are
+//! rotated a quarter turn on the ±X faces and flipped on -Z. That is invisible
+//! on noise and glaring on a window grid: two walls of every building would
+//! have had their floors running vertically.
 //!
 //! The collider is a unit cube too: Avian scales colliders by the entity's
 //! global transform, so the same scale drives visual and physical size and the
 //! two can never drift apart.
 
 use avian3d::prelude::*;
+use bevy::math::Affine2;
 use bevy::prelude::*;
+use bevy::render::mesh::{Indices, PrimitiveTopology};
 
 use super::citygen::{Block, Building, District, PALETTE_SIZE};
+use super::texture::{self, FacadeClass};
 
 /// Pavement height above the road surface.
 pub const SIDEWALK_HEIGHT: f32 = 0.28;
 
+/// Height of the parapet slab capping every building.
+const ROOF_THICKNESS: f32 = 0.55;
+/// How far the roof slab oversails the walls, in metres.
+const ROOF_OVERHANG: f32 = 0.18;
+
+/// Roughly how wide a paving slab or a patch of grass should be, in metres.
+const GROUND_TILE: f32 = 2.6;
+/// Tiling factors block tops are quantised to, so they can share materials.
+const GROUND_BUCKETS: [f32; 4] = [8.0, 12.0, 17.0, 24.0];
+
+const CLASS_COUNT: usize = FacadeClass::ALL.len();
+
 #[derive(Resource)]
 pub struct CityAssets {
     pub unit_cube: Handle<Mesh>,
-    /// Indexed by `district_index * PALETTE_SIZE + palette`.
-    building: Vec<Handle<StandardMaterial>>,
-    sidewalk: Handle<StandardMaterial>,
-    park: Handle<StandardMaterial>,
+    /// A 1x1 quad in the XZ plane, laid over each block as its walking surface.
+    unit_quad: Handle<Mesh>,
+    /// Indexed by `(district_index * PALETTE_SIZE + palette) * CLASS_COUNT + class`.
+    building: Vec<Handle<super::facade::FacadeMaterial>>,
+    roof: Handle<StandardMaterial>,
+    kerb: Handle<StandardMaterial>,
+    park_kerb: Handle<StandardMaterial>,
+    /// One per entry in [`GROUND_BUCKETS`].
+    paving: Vec<Handle<StandardMaterial>>,
+    grass: Vec<Handle<StandardMaterial>>,
 }
 
 /// Marks which chunk an entity belongs to, so streaming can despawn it.
@@ -40,41 +75,135 @@ fn district_index(district: District) -> usize {
     }
 }
 
-/// Four tones per district. Flat-shaded blocks of colour are the whole art
-/// direction here: it needs no textures or artist, and reads as deliberate.
+/// Four tones per district, tinting a shared greyscale facade. Blocks of
+/// colour are still the art direction; the texture only says where the windows
+/// are.
 fn palette(district: District) -> [Color; PALETTE_SIZE as usize] {
     match district {
         District::Downtown => [
-            Color::srgb(0.40, 0.46, 0.55),
-            Color::srgb(0.31, 0.38, 0.48),
-            Color::srgb(0.50, 0.55, 0.60),
-            Color::srgb(0.26, 0.33, 0.42),
+            Color::srgb(0.42, 0.48, 0.58),
+            Color::srgb(0.33, 0.40, 0.51),
+            Color::srgb(0.53, 0.58, 0.63),
+            Color::srgb(0.28, 0.35, 0.45),
         ],
         District::Midtown => [
-            Color::srgb(0.58, 0.55, 0.50),
-            Color::srgb(0.47, 0.45, 0.43),
-            Color::srgb(0.65, 0.61, 0.55),
-            Color::srgb(0.41, 0.40, 0.40),
+            Color::srgb(0.61, 0.58, 0.53),
+            Color::srgb(0.50, 0.48, 0.46),
+            Color::srgb(0.69, 0.65, 0.58),
+            Color::srgb(0.44, 0.43, 0.43),
         ],
         District::Residential => [
-            Color::srgb(0.67, 0.55, 0.45),
-            Color::srgb(0.73, 0.65, 0.53),
-            Color::srgb(0.57, 0.44, 0.37),
-            Color::srgb(0.62, 0.58, 0.49),
+            Color::srgb(0.71, 0.58, 0.48),
+            Color::srgb(0.77, 0.69, 0.56),
+            Color::srgb(0.60, 0.47, 0.39),
+            Color::srgb(0.66, 0.61, 0.52),
         ],
         District::Industrial => [
-            Color::srgb(0.45, 0.43, 0.40),
-            Color::srgb(0.53, 0.42, 0.34),
-            Color::srgb(0.37, 0.38, 0.39),
-            Color::srgb(0.48, 0.46, 0.41),
+            Color::srgb(0.48, 0.46, 0.42),
+            Color::srgb(0.56, 0.45, 0.36),
+            Color::srgb(0.39, 0.40, 0.41),
+            Color::srgb(0.51, 0.49, 0.44),
         ],
-        District::Park => [Color::srgb(0.28, 0.42, 0.24); PALETTE_SIZE as usize],
+        District::Park => [Color::srgb(0.30, 0.44, 0.26); PALETTE_SIZE as usize],
     }
+}
+
+/// A unit cube whose six faces all agree about which way is up.
+///
+/// Side faces run U along their horizontal axis and V from the bottom edge to
+/// the top; the top and bottom map U to X and V to Z. Without that, a facade
+/// texture arrives sideways on two walls out of four.
+fn unit_cube_mesh() -> Mesh {
+    // (position, normal, uv), four vertices per face.
+    let faces: [([f32; 3], [f32; 3], [f32; 2]); 24] = [
+        // +Z
+        ([-0.5, -0.5, 0.5], [0.0, 0.0, 1.0], [0.0, 0.0]),
+        ([0.5, -0.5, 0.5], [0.0, 0.0, 1.0], [1.0, 0.0]),
+        ([0.5, 0.5, 0.5], [0.0, 0.0, 1.0], [1.0, 1.0]),
+        ([-0.5, 0.5, 0.5], [0.0, 0.0, 1.0], [0.0, 1.0]),
+        // -Z
+        ([0.5, -0.5, -0.5], [0.0, 0.0, -1.0], [0.0, 0.0]),
+        ([-0.5, -0.5, -0.5], [0.0, 0.0, -1.0], [1.0, 0.0]),
+        ([-0.5, 0.5, -0.5], [0.0, 0.0, -1.0], [1.0, 1.0]),
+        ([0.5, 0.5, -0.5], [0.0, 0.0, -1.0], [0.0, 1.0]),
+        // +X
+        ([0.5, -0.5, 0.5], [1.0, 0.0, 0.0], [0.0, 0.0]),
+        ([0.5, -0.5, -0.5], [1.0, 0.0, 0.0], [1.0, 0.0]),
+        ([0.5, 0.5, -0.5], [1.0, 0.0, 0.0], [1.0, 1.0]),
+        ([0.5, 0.5, 0.5], [1.0, 0.0, 0.0], [0.0, 1.0]),
+        // -X
+        ([-0.5, -0.5, -0.5], [-1.0, 0.0, 0.0], [0.0, 0.0]),
+        ([-0.5, -0.5, 0.5], [-1.0, 0.0, 0.0], [1.0, 0.0]),
+        ([-0.5, 0.5, 0.5], [-1.0, 0.0, 0.0], [1.0, 1.0]),
+        ([-0.5, 0.5, -0.5], [-1.0, 0.0, 0.0], [0.0, 1.0]),
+        // +Y
+        ([-0.5, 0.5, 0.5], [0.0, 1.0, 0.0], [0.0, 0.0]),
+        ([0.5, 0.5, 0.5], [0.0, 1.0, 0.0], [1.0, 0.0]),
+        ([0.5, 0.5, -0.5], [0.0, 1.0, 0.0], [1.0, 1.0]),
+        ([-0.5, 0.5, -0.5], [0.0, 1.0, 0.0], [0.0, 1.0]),
+        // -Y
+        ([-0.5, -0.5, -0.5], [0.0, -1.0, 0.0], [0.0, 0.0]),
+        ([0.5, -0.5, -0.5], [0.0, -1.0, 0.0], [1.0, 0.0]),
+        ([0.5, -0.5, 0.5], [0.0, -1.0, 0.0], [1.0, 1.0]),
+        ([-0.5, -0.5, 0.5], [0.0, -1.0, 0.0], [0.0, 1.0]),
+    ];
+
+    let indices: Vec<u32> = (0..6u32)
+        .flat_map(|face| {
+            let base = face * 4;
+            [base, base + 1, base + 2, base + 2, base + 3, base]
+        })
+        .collect();
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        bevy::asset::RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        faces.iter().map(|(p, _, _)| *p).collect::<Vec<_>>(),
+    )
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_NORMAL,
+        faces.iter().map(|(_, n, _)| *n).collect::<Vec<_>>(),
+    )
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_UV_0,
+        faces.iter().map(|(_, _, uv)| *uv).collect::<Vec<_>>(),
+    )
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Adds a mikktspace tangent basis, or leaves the mesh alone and says so.
+///
+/// A missing tangent attribute makes the normal-mapped pipeline fail to build
+/// rather than fall back, so a loud warning beats a silently black city.
+pub fn with_tangents(mut mesh: Mesh) -> Mesh {
+    if let Err(error) = mesh.generate_tangents() {
+        warn!("no tangents for a mesh, normal maps will be wrong: {error}");
+    }
+    mesh
+}
+
+/// Nearest tiling factor that puts ground tiles near [`GROUND_TILE`] across a
+/// surface `extent` metres wide.
+fn ground_bucket(extent: f32) -> usize {
+    let wanted = (extent / GROUND_TILE).max(1.0);
+    GROUND_BUCKETS
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| (*a - wanted).abs().total_cmp(&(*b - wanted).abs()))
+        .map(|(i, _)| i)
+        .unwrap_or(0)
 }
 
 pub fn build_assets(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+    library: &super::material::MaterialLibrary,
+    facades_out: &mut Assets<super::facade::FacadeMaterial>,
+    wet: &mut super::weather::WetSurfaces,
 ) -> CityAssets {
     let districts = [
         District::Downtown,
@@ -84,37 +213,150 @@ pub fn build_assets(
         District::Park,
     ];
 
-    let mut building = Vec::with_capacity(districts.len() * PALETTE_SIZE as usize);
+    // One set of facade maps per height class, shared by every district that
+    // has a building of that height.
+    let facades: Vec<_> = FacadeClass::ALL
+        .iter()
+        .map(|&class| {
+            let maps = texture::facade(class);
+            (
+                images.add(maps.base),
+                images.add(maps.emissive),
+                images.add(maps.surface),
+                images.add(maps.normal),
+            )
+        })
+        .collect();
+
+    let mut building = Vec::with_capacity(districts.len() * PALETTE_SIZE as usize * CLASS_COUNT);
     for district in districts {
-        for color in palette(district) {
-            building.push(materials.add(StandardMaterial {
-                base_color: color,
-                perceptual_roughness: 0.85,
-                ..default()
-            }));
+        for (slot, color) in palette(district).into_iter().enumerate() {
+            // The grain is the district's, but how it is dressed — scale, and
+            // whether it is turned — belongs to the palette slot, so a street
+            // of one district is not a street of one photograph.
+            let grain = super::facade::FacadeGrain::for_district(library, district, slot);
+            for (base, emissive, surface, normal) in &facades {
+                building.push(facades_out.add(super::facade::FacadeMaterial {
+                    base: StandardMaterial {
+                        base_color: color,
+                        base_color_texture: Some(base.clone()),
+                        emissive_texture: Some(emissive.clone()),
+                        // Dark until dusk; `timeofday::light_windows` drives it.
+                        emissive: LinearRgba::BLACK,
+                        metallic_roughness_texture: Some(surface.clone()),
+                        normal_map_texture: Some(normal.clone()),
+                        perceptual_roughness: 1.0,
+                        metallic: 1.0,
+                        ..default()
+                    },
+                    extension: grain.clone(),
+                }));
+            }
+        }
+    }
+
+    // Painted stand-ins, made whether or not they end up used: the scanned
+    // library decides per surface, and a set can be present for the pavement
+    // and missing for the grass.
+    let paving_texture = images.add(texture::paving());
+    let paving_relief = images.add(texture::paving_normal());
+    let grass_texture = images.add(texture::grass());
+
+    let mut paving = Vec::with_capacity(GROUND_BUCKETS.len());
+    let mut grass = Vec::with_capacity(GROUND_BUCKETS.len());
+    for tiling in GROUND_BUCKETS {
+        let uv_transform = Affine2::from_scale(Vec2::splat(tiling));
+
+        let mut slabs = StandardMaterial {
+            uv_transform,
+            ..default()
+        };
+        match library.get(super::material::set::PAVEMENT) {
+            Some(scanned) => scanned.apply(&mut slabs),
+            None => {
+                slabs.base_color = Color::srgb(0.50, 0.50, 0.52);
+                slabs.base_color_texture = Some(paving_texture.clone());
+                slabs.normal_map_texture = Some(paving_relief.clone());
+                slabs.perceptual_roughness = 0.95;
+            }
+        }
+        let (dry_color, dry_roughness) = (slabs.base_color, slabs.perceptual_roughness);
+        let handle = materials.add(slabs);
+        // Pavements soak like the road does. Grass does not — wet grass is
+        // darker but no glossier, and the shine is the whole point here.
+        wet.add(handle.clone(), dry_color, dry_roughness);
+        paving.push(handle);
+
+        let mut lawn = StandardMaterial {
+            uv_transform,
+            ..default()
+        };
+        match library.get(super::material::set::GRASS) {
+            Some(scanned) => scanned.apply(&mut lawn),
+            None => {
+                lawn.base_color = Color::srgb(0.29, 0.43, 0.24);
+                lawn.base_color_texture = Some(grass_texture.clone());
+                lawn.perceptual_roughness = 1.0;
+            }
+        }
+        grass.push(materials.add(lawn));
+    }
+
+    let mut tar = StandardMaterial {
+        // Roofs are only ever seen from a distance, so one tiling suits all.
+        uv_transform: Affine2::from_scale(Vec2::splat(6.0)),
+        ..default()
+    };
+    match library.get(super::material::set::ROOF) {
+        Some(scanned) => scanned.apply(&mut tar),
+        None => {
+            tar.base_color = Color::srgb(0.38, 0.38, 0.40);
+            tar.base_color_texture = Some(images.add(texture::roof()));
+            tar.normal_map_texture = Some(images.add(texture::roof_normal()));
+            tar.perceptual_roughness = 0.96;
         }
     }
 
     CityAssets {
-        unit_cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+        // Normal mapping needs a tangent basis, and mikktspace is the one the
+        // shader agrees with; hand-written tangents are how normal maps end up
+        // lit from the wrong side on two faces out of six.
+        unit_cube: meshes.add(with_tangents(unit_cube_mesh())),
+        unit_quad: meshes.add(with_tangents(
+            Plane3d::default().mesh().size(1.0, 1.0).build(),
+        )),
         building,
-        sidewalk: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.54, 0.54, 0.55),
+        roof: materials.add(tar),
+        kerb: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.50, 0.50, 0.51),
             perceptual_roughness: 0.95,
             ..default()
         }),
-        park: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.27, 0.41, 0.23),
+        park_kerb: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.33, 0.31, 0.26),
             perceptual_roughness: 1.0,
             ..default()
         }),
+        paving,
+        grass,
     }
 }
 
 impl CityAssets {
-    fn material_for(&self, district: District, palette: u8) -> Handle<StandardMaterial> {
-        let i = district_index(district) * PALETTE_SIZE as usize + palette as usize;
+    fn material_for(
+        &self,
+        district: District,
+        palette: u8,
+        class: FacadeClass,
+    ) -> Handle<super::facade::FacadeMaterial> {
+        let slot = district_index(district) * PALETTE_SIZE as usize + palette as usize;
+        let i = slot * CLASS_COUNT + class.index();
         self.building[i.min(self.building.len() - 1)].clone()
+    }
+
+    /// Every facade material, for the day/night cycle to light up.
+    pub fn building_materials(&self) -> &[Handle<super::facade::FacadeMaterial>] {
+        &self.building
     }
 }
 
@@ -123,19 +365,19 @@ pub fn spawn_block(commands: &mut Commands, assets: &CityAssets, block: &Block, 
     let area = block.area;
     let size = area.size();
     let center = area.center();
+    let park = block.district == District::Park;
 
-    // Pavement slab (or grass, for parks). It gets a collider: at 28cm it is a
-    // kerb the player steps up onto, and without one they would stand sunk into
-    // it. One static box per block is cheap.
-    let surface = if block.district == District::Park {
-        assets.park.clone()
-    } else {
-        assets.sidewalk.clone()
-    };
+    // The kerb slab gets the collider: at 28cm it is a step the player walks up
+    // onto, and without one they would stand sunk into it. One static box per
+    // block is cheap.
     commands.spawn((
         ChunkOf(chunk),
         Mesh3d(assets.unit_cube.clone()),
-        MeshMaterial3d(surface),
+        MeshMaterial3d(if park {
+            assets.park_kerb.clone()
+        } else {
+            assets.kerb.clone()
+        }),
         Transform::from_xyz(center.x, SIDEWALK_HEIGHT * 0.5, center.y).with_scale(Vec3::new(
             size.x,
             SIDEWALK_HEIGHT,
@@ -143,6 +385,24 @@ pub fn spawn_block(commands: &mut Commands, assets: &CityAssets, block: &Block, 
         )),
         RigidBody::Static,
         Collider::cuboid(1.0, 1.0, 1.0),
+    ));
+
+    // The walking surface is a separate quad rather than the top of the slab,
+    // so paving can tile at a metre or two while the kerb face beside it stays
+    // plain concrete instead of a stack of squashed slabs.
+    let bucket = ground_bucket((size.x + size.y) * 0.5);
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(assets.unit_quad.clone()),
+        MeshMaterial3d(if park {
+            assets.grass[bucket].clone()
+        } else {
+            assets.paving[bucket].clone()
+        }),
+        // A few millimetres proud of the slab, which is enough to settle the
+        // depth test without being visible from standing height.
+        Transform::from_xyz(center.x, SIDEWALK_HEIGHT + 0.004, center.y)
+            .with_scale(Vec3::new(size.x, 1.0, size.y)),
     ));
 
     for building in &block.buildings {
@@ -160,15 +420,105 @@ fn spawn_building(
     let size = building.footprint.size();
     let center = building.footprint.center();
     let height = building.height;
+    let class = FacadeClass::for_height(height);
 
     commands.spawn((
         ChunkOf(chunk),
         Mesh3d(assets.unit_cube.clone()),
-        MeshMaterial3d(assets.material_for(district, building.palette)),
+        MeshMaterial3d(assets.material_for(district, building.palette, class)),
         Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
             .with_scale(Vec3::new(size.x, height, size.y)),
         RigidBody::Static,
         // Unit cube: Avian scales it by the transform above.
         Collider::cuboid(1.0, 1.0, 1.0),
     ));
+
+    // A capping slab, slightly oversailing the walls. It hides the windowed top
+    // face of the cube, and the overhang reads as a parapet from street level —
+    // which is most of what stops a box looking like a box. Visual only: the
+    // wall collider already reaches this high.
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.roof.clone()),
+        Transform::from_xyz(
+            center.x,
+            height + SIDEWALK_HEIGHT + ROOF_THICKNESS * 0.5,
+            center.y,
+        )
+        .with_scale(Vec3::new(
+            size.x + ROOF_OVERHANG * 2.0,
+            ROOF_THICKNESS,
+            size.y + ROOF_OVERHANG * 2.0,
+        )),
+    ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cube_faces_all_agree_about_up() {
+        let mesh = unit_cube_mesh();
+        let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap();
+        let uvs = mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap();
+        let (positions, uvs) = match (positions, uvs) {
+            (
+                bevy::render::mesh::VertexAttributeValues::Float32x3(p),
+                bevy::render::mesh::VertexAttributeValues::Float32x2(u),
+            ) => (p, u),
+            _ => panic!("unexpected attribute formats"),
+        };
+
+        // The four side faces come first. On every one of them, V must climb
+        // with Y, or facades land sideways or upside down.
+        for vertex in 0..16 {
+            let y = positions[vertex][1];
+            let v = uvs[vertex][1];
+            assert_eq!(
+                y > 0.0,
+                v > 0.5,
+                "side vertex {vertex} has V running against Y"
+            );
+        }
+    }
+
+    #[test]
+    fn ground_buckets_pick_the_nearest_tiling() {
+        // A 20m block wants about 8 tiles across; a 60m block wants 23.
+        assert_eq!(ground_bucket(20.0), 0);
+        assert_eq!(ground_bucket(62.0), GROUND_BUCKETS.len() - 1);
+        // Anything degenerate still has to land in range.
+        for extent in [0.0, 0.5, 5.0, 400.0] {
+            assert!(ground_bucket(extent) < GROUND_BUCKETS.len());
+        }
+    }
+
+    #[test]
+    fn every_district_palette_and_class_addresses_a_distinct_material() {
+        let districts = [
+            District::Downtown,
+            District::Midtown,
+            District::Residential,
+            District::Industrial,
+            District::Park,
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for district in districts {
+            for palette in 0..PALETTE_SIZE {
+                for class in FacadeClass::ALL {
+                    let slot = district_index(district) * PALETTE_SIZE as usize + palette as usize;
+                    assert!(
+                        seen.insert(slot * CLASS_COUNT + class.index()),
+                        "material index collision at {district:?}/{palette}/{class:?}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            seen.len(),
+            districts.len() * PALETTE_SIZE as usize * CLASS_COUNT
+        );
+    }
 }

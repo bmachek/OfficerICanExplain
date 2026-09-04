@@ -40,25 +40,83 @@ pub struct AlwaysSimulated;
 #[derive(Component)]
 pub struct WheelVisual(pub usize);
 
+/// The three lofts for one archetype, as loaded meshes.
+struct BodyHandles {
+    shell: Handle<Mesh>,
+    lower: Handle<Mesh>,
+    cabin: Option<Handle<Mesh>>,
+}
+
 #[derive(Resource)]
 pub struct VehicleAssets {
-    body: Handle<Mesh>,
-    wheel: Handle<Mesh>,
+    /// One entry per archetype, built once and shared by every car of that
+    /// kind — which is also what lets Bevy batch a street full of them.
+    bodies: Vec<(VehicleClass, BodyHandles)>,
+    tyre_mesh: Handle<Mesh>,
+    rim_mesh: Handle<Mesh>,
     tyre: Handle<StandardMaterial>,
+    rim: Handle<StandardMaterial>,
     glass: Handle<StandardMaterial>,
 }
+
+impl VehicleAssets {
+    fn body(&self, class: VehicleClass) -> &BodyHandles {
+        self.bodies
+            .iter()
+            .find(|(c, _)| *c == class)
+            .map(|(_, meshes)| meshes)
+            .expect("every archetype gets meshes at startup")
+    }
+}
+
+/// Fraction of its own radius that a tyre is wide.
+const TYRE_WIDTH: f32 = 0.66;
 
 pub fn build_assets(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
 ) -> VehicleAssets {
+    let bodies = VehicleClass::ALL
+        .into_iter()
+        .map(|class| {
+            let built = super::body::build(class, &class.spec());
+            // Normal maps need a tangent basis, and mikktspace is the one the
+            // shader agrees with.
+            let mut add = |mesh| meshes.add(crate::world::buildings::with_tangents(mesh));
+            (
+                class,
+                BodyHandles {
+                    shell: add(built.shell),
+                    lower: add(built.lower),
+                    cabin: built.cabin.map(&mut add),
+                },
+            )
+        })
+        .collect();
+
     VehicleAssets {
-        body: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        // Bevy cylinders run along Y; the child transform lays it on its side.
-        wheel: meshes.add(Cylinder::new(1.0, 0.24)),
+        bodies,
+        tyre_mesh: meshes.add(crate::world::buildings::with_tangents(
+            super::body::tyre_mesh(TYRE_WIDTH),
+        )),
+        rim_mesh: meshes.add(crate::world::buildings::with_tangents(
+            super::body::rim_mesh(TYRE_WIDTH),
+        )),
         tyre: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.06, 0.06, 0.07),
-            perceptual_roughness: 0.95,
+            base_color: Color::srgb(0.34, 0.34, 0.36),
+            base_color_texture: Some(images.add(super::paint::tyre())),
+            normal_map_texture: Some(images.add(super::paint::tyre_normal())),
+            perceptual_roughness: 0.94,
+            ..default()
+        }),
+        rim: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.82, 0.83, 0.86),
+            base_color_texture: Some(images.add(super::paint::rim())),
+            normal_map_texture: Some(images.add(super::paint::rim_normal())),
+            metallic_roughness_texture: Some(images.add(super::paint::rim_surface())),
+            perceptual_roughness: 1.0,
+            metallic: 1.0,
             ..default()
         }),
         glass: materials.add(StandardMaterial {
@@ -78,16 +136,25 @@ pub fn spawn_vehicle(
     transform: Transform,
 ) -> Entity {
     let size = spec.half_extents * 2.0;
+    // Car paint is a coloured base under a clear lacquer, and modelling it that
+    // way rather than as "shiny metal" is what makes the highlight sit *on* the
+    // panel instead of tinting itself the colour of the car.
     let paint = materials.add(StandardMaterial {
         base_color: spec.body_color,
-        perceptual_roughness: 0.45,
-        metallic: 0.25,
+        // Flake in the basecoat, then lacquer over the top. Metallic paint is
+        // rougher underneath than solid paint and reads duller for it, which is
+        // why the roughness moves with the flake rather than staying put.
+        perceptual_roughness: 0.30 + spec.body_metallic * 0.22,
+        metallic: spec.body_metallic,
+        clearcoat: 1.0,
+        clearcoat_perceptual_roughness: 0.08,
         ..default()
     });
 
     let anchors = spec.wheel_anchors();
     let wheel_radius = spec.wheel_radius;
     let name = spec.display_name;
+    let body = assets.body(spec.class);
 
     let mut entity = commands.spawn((
         Name::new(name),
@@ -108,33 +175,55 @@ pub fn spawn_vehicle(
     ));
 
     entity.with_children(|parent| {
-        // Body shell. Kept separate from the collider so the visual can be
-        // shaped without changing how the car collides.
+        // The shell is already built at this spec's size, so unlike the box it
+        // replaced it needs no scaling. It stays separate from the collider:
+        // the car collides as the box it always did, and the bodywork is free
+        // to be any shape inside that.
         parent.spawn((
-            Mesh3d(assets.body.clone()),
+            super::damage::BodyPanel,
+            Mesh3d(body.shell.clone()),
             MeshMaterial3d(paint.clone()),
-            Transform::from_scale(size),
+            Transform::IDENTITY,
         ));
-        // Cabin, set back and narrower, so the car reads as having a front.
+        // The sill, in the same paint. Separate only so the shell above it can
+        // arch over the wheels without the body pinching in half.
         parent.spawn((
-            Mesh3d(assets.body.clone()),
-            MeshMaterial3d(assets.glass.clone()),
-            Transform::from_xyz(0.0, size.y * 0.52, size.z * 0.06).with_scale(Vec3::new(
-                size.x * 0.82,
-                size.y * 0.60,
-                size.z * 0.44,
-            )),
+            super::damage::BodyPanel,
+            Mesh3d(body.lower.clone()),
+            MeshMaterial3d(paint.clone()),
+            Transform::IDENTITY,
         ));
+        if let Some(cabin) = &body.cabin {
+            parent.spawn((
+                Mesh3d(cabin.clone()),
+                MeshMaterial3d(assets.glass.clone()),
+                Transform::IDENTITY,
+            ));
+        }
 
         for (index, anchor) in anchors.iter().enumerate().take(WHEEL_COUNT) {
-            parent.spawn((
-                WheelVisual(index),
-                Mesh3d(assets.wheel.clone()),
-                MeshMaterial3d(assets.tyre.clone()),
-                Transform::from_translation(*anchor)
-                    .with_scale(Vec3::splat(wheel_radius))
-                    .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)),
-            ));
+            // Wheels are built about the X axis at unit radius, so the whole
+            // assembly scales with the spec and needs no laying-on-its-side.
+            parent
+                .spawn((
+                    WheelVisual(index),
+                    Mesh3d(assets.tyre_mesh.clone()),
+                    MeshMaterial3d(assets.tyre.clone()),
+                    Transform::from_translation(*anchor).with_scale(Vec3::splat(wheel_radius)),
+                ))
+                .with_child((
+                    Mesh3d(assets.rim_mesh.clone()),
+                    MeshMaterial3d(assets.rim.clone()),
+                    // The face belongs on the outside of the car, so the
+                    // left-hand wheels wear theirs turned around. A negative
+                    // scale would do it too, and would turn every triangle
+                    // inside out.
+                    Transform::from_rotation(if anchor.x < 0.0 {
+                        Quat::from_rotation_y(std::f32::consts::PI)
+                    } else {
+                        Quat::IDENTITY
+                    }),
+                ));
         }
     });
 
@@ -224,10 +313,10 @@ pub fn update_wheel_visuals(
             } else {
                 Quat::IDENTITY
             };
-            // Lay the cylinder on its side, then spin it about its axle.
-            transform.rotation = steer
-                * Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)
-                * Quat::from_rotation_y(-state.wheel_spin);
+            // The wheel's axle is its own X axis, so rolling is a rotation
+            // about that. Negative: driving forwards is -Z, and the contact
+            // patch has to travel backwards relative to the car.
+            transform.rotation = steer * Quat::from_rotation_x(-state.wheel_spin);
         }
     }
 }
@@ -269,7 +358,8 @@ pub fn spawn_parked_vehicles(
         let position = a + *direction * (edge.length * along) + normal * offset * side;
 
         let class = VehicleClass::CIVILIAN[rng.random_range(0..VehicleClass::CIVILIAN.len())];
-        let spec = class.spec();
+        let mut spec = class.spec();
+        (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
         // Nose along the street, facing the way traffic on that side runs.
         let facing = if side > 0.0 { *direction } else { -*direction };
         let heading = heading_towards(facing);
@@ -293,7 +383,8 @@ pub fn spawn_parked_vehicles(
             return;
         };
 
-        let spec = VehicleClass::Sedan.spec();
+        let mut spec = VehicleClass::Sedan.spec();
+        (spec.body_color, spec.body_metallic) = super::paint::street_paint(&mut rng);
         let heading = heading_towards(*direction);
         // On the carriageway, a little down the street from the junction.
         let normal = Vec2::new(-direction.y, direction.x);

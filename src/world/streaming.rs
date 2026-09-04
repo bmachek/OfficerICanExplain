@@ -11,6 +11,9 @@ use bevy::prelude::*;
 
 use super::City;
 use super::buildings::{ChunkOf, CityAssets, spawn_block};
+use super::markings::{MarkingAssets, spawn_edge};
+use super::props::PropAssets;
+use super::roadgraph::EdgeId;
 use crate::core::config::GameConfig;
 
 pub const CHUNK_SIZE: f32 = 250.0;
@@ -34,6 +37,11 @@ pub fn chunk_center(chunk: IVec2) -> Vec2 {
 #[derive(Resource, Default)]
 pub struct ChunkIndex {
     blocks: HashMap<IVec2, Vec<usize>>,
+    /// Streets, filed by the chunk their midpoint falls in. A street can span
+    /// two chunks; filing it by its middle means it is painted exactly once,
+    /// and the half that hangs over the edge is a few metres of line beyond a
+    /// boundary nobody can see.
+    streets: HashMap<IVec2, Vec<EdgeId>>,
 }
 
 impl ChunkIndex {
@@ -45,7 +53,18 @@ impl ChunkIndex {
                 .or_default()
                 .push(i);
         }
-        Self { blocks }
+
+        let graph = &city.graph;
+        let mut streets: HashMap<IVec2, Vec<EdgeId>> = HashMap::default();
+        for (i, edge) in graph.edges().enumerate() {
+            let middle = graph.node(edge.a).pos.midpoint(graph.node(edge.b).pos);
+            streets
+                .entry(chunk_of(middle))
+                .or_default()
+                .push(EdgeId(i as u32));
+        }
+
+        Self { blocks, streets }
     }
 
     pub fn chunk_count(&self) -> usize {
@@ -54,6 +73,10 @@ impl ChunkIndex {
 
     pub fn blocks_in(&self, chunk: IVec2) -> Option<&[usize]> {
         self.blocks.get(&chunk).map(|v| v.as_slice())
+    }
+
+    pub fn streets_in(&self, chunk: IVec2) -> Option<&[EdgeId]> {
+        self.streets.get(&chunk).map(|v| v.as_slice())
     }
 
     /// Which chunks should be resident for a camera at `focus`.
@@ -67,6 +90,7 @@ impl ChunkIndex {
         let cutoff = radius + CHUNK_SIZE * std::f32::consts::SQRT_2 * 0.5;
         self.blocks
             .keys()
+            .chain(self.streets.keys())
             .copied()
             .filter(|&c| chunk_center(c).distance(focus) <= cutoff)
             .collect()
@@ -100,6 +124,9 @@ pub fn update_streaming(
     city: Res<City>,
     index: Res<ChunkIndex>,
     assets: Res<CityAssets>,
+    paint: Res<MarkingAssets>,
+    props: Res<PropAssets>,
+    config_seed: Res<GameConfig>,
     mut active: ResMut<ActiveChunks>,
     mut timer: ResMut<StreamTimer>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
@@ -118,6 +145,21 @@ pub fn update_streaming(
         if let Some(block_indices) = index.blocks_in(chunk) {
             for &i in block_indices {
                 spawn_block(&mut commands, &assets, &city.blocks[i], chunk);
+            }
+        }
+        if let Some(streets) = index.streets_in(chunk) {
+            // One stream per chunk, so a chunk's furniture is identical every
+            // time it is walked back into rather than reshuffling.
+            let mut rng = crate::core::rng::stream_for_chunk(
+                config_seed.world_seed,
+                crate::core::rng::stream::PROPS,
+                (chunk.x, chunk.y),
+            );
+            for &id in streets {
+                let edge = city.graph.edge(id);
+                let (from, to) = (city.graph.node(edge.a).pos, city.graph.node(edge.b).pos);
+                spawn_edge(&mut commands, &paint, edge, from, to, chunk);
+                super::props::spawn_edge(&mut commands, &props, &mut rng, edge, from, to, chunk);
             }
         }
     }
