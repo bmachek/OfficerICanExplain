@@ -63,7 +63,7 @@ following and start ramming.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, tunables, deterministic RNG, screenshot tool |
-| `world` | City generator, road graph, chunk streaming, day/night, street lights |
+| `world` | City generator, road graph, chunk streaming, day/night, lights, street furniture |
 | `player` | Input mapping, character controller, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, damage, parked-car spawning |
 | `ai` | Traffic, pedestrians, police pursuit, shared steering |

@@ -12,6 +12,7 @@ use bevy::prelude::*;
 use super::City;
 use super::buildings::{ChunkOf, CityAssets, spawn_block};
 use super::markings::{MarkingAssets, spawn_edge};
+use super::props::PropAssets;
 use super::roadgraph::EdgeId;
 use crate::core::config::GameConfig;
 
@@ -124,6 +125,8 @@ pub fn update_streaming(
     index: Res<ChunkIndex>,
     assets: Res<CityAssets>,
     paint: Res<MarkingAssets>,
+    props: Res<PropAssets>,
+    config_seed: Res<GameConfig>,
     mut active: ResMut<ActiveChunks>,
     mut timer: ResMut<StreamTimer>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
@@ -145,10 +148,18 @@ pub fn update_streaming(
             }
         }
         if let Some(streets) = index.streets_in(chunk) {
+            // One stream per chunk, so a chunk's furniture is identical every
+            // time it is walked back into rather than reshuffling.
+            let mut rng = crate::core::rng::stream_for_chunk(
+                config_seed.world_seed,
+                crate::core::rng::stream::PROPS,
+                (chunk.x, chunk.y),
+            );
             for &id in streets {
                 let edge = city.graph.edge(id);
                 let (from, to) = (city.graph.node(edge.a).pos, city.graph.node(edge.b).pos);
                 spawn_edge(&mut commands, &paint, edge, from, to, chunk);
+                super::props::spawn_edge(&mut commands, &props, &mut rng, edge, from, to, chunk);
             }
         }
     }

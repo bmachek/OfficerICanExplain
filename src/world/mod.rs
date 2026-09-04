@@ -5,6 +5,7 @@ pub mod citygen;
 pub mod facade;
 pub mod markings;
 pub mod material;
+pub mod props;
 pub mod roadgraph;
 pub mod streaming;
 pub mod streetlights;
@@ -64,6 +65,7 @@ fn generate_city(
     let city = City(layout);
     commands.insert_resource(streaming::ChunkIndex::build(&city));
     commands.insert_resource(city);
+    commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(markings::build_assets(
         &mut meshes,
         &mut materials,
