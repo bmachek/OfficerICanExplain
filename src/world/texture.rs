@@ -385,6 +385,15 @@ impl FacadeClass {
         }
     }
 
+    /// Whether this kind of building has shops at street level.
+    ///
+    /// A house does not. Its ground floor is a front door and the same windows
+    /// as upstairs, and giving it a shop window turns a residential street into
+    /// a high street.
+    fn has_shopfronts(self) -> bool {
+        !matches!(self, FacadeClass::House)
+    }
+
     /// Fraction of each cell the glass fills, horizontally and vertically.
     fn glazing(self) -> (f32, f32) {
         match self {
@@ -434,6 +443,10 @@ struct Cell {
     pane: f32,
     /// True inside the glass.
     glass: bool,
+    /// True on the ground storey, which is shops rather than rooms.
+    ground: bool,
+    /// 1 inside the sign board over a shopfront, 0 elsewhere.
+    fascia: f32,
     /// 0 at the bottom of the pane, 1 at the top. Meaningless off the glass.
     up_pane: f32,
     /// Distance below the pane above, in cell heights; `None` above it.
@@ -450,9 +463,32 @@ fn cell_at(class: FacadeClass, u: f32, v: f32) -> Cell {
     let (column, row) = (su.floor(), sv.floor());
     let (fu, fv) = (su - column, sv - row);
 
+    // The ground storey is not a storey of rooms, and drawing it as one is the
+    // single clearest sign that a facade was generated: real streets are shops
+    // and lobbies at eye level with flats above, and eye level is the only part
+    // a pedestrian ever looks at closely.
+    let ground = row < 1.0 && class.has_shopfronts();
+
     // Panes sit slightly above centre in their cell, leaving a spandrel below.
-    let (u0, u1) = (0.5 - glass_w * 0.5, 0.5 + glass_w * 0.5);
-    let (v0, v1) = (0.62 - glass_h * 0.5, 0.62 + glass_h * 0.5);
+    // A shopfront instead runs nearly the full bay, from a low stallriser up to
+    // the sign board.
+    let (u0, u1, v0, v1) = if ground {
+        (0.08, 0.92, 0.16, 0.74)
+    } else {
+        (
+            0.5 - glass_w * 0.5,
+            0.5 + glass_w * 0.5,
+            0.62 - glass_h * 0.5,
+            0.62 + glass_h * 0.5,
+        )
+    };
+
+    // The sign board sits between the top of the glazing and the floor line.
+    let fascia = if ground {
+        smoothstep01((fv - 0.78) / 0.03) * smoothstep01((0.97 - fv) / 0.02)
+    } else {
+        0.0
+    };
 
     // Softness of the reveal, in cell widths.
     const REVEAL: f32 = 0.02;
@@ -466,6 +502,8 @@ fn cell_at(class: FacadeClass, u: f32, v: f32) -> Cell {
         row: row as u32,
         pane,
         glass: pane > 0.5,
+        ground,
+        fascia,
         up_pane: ((fv - v0) / (v1 - v0)).clamp(0.0, 1.0),
         // Grime runs down from the sill, so only the strip under a pane cares.
         below_pane: (fv < v0 && fu > u0 && fu < u1).then(|| (v0 - fv) / v0.max(1e-3)),
@@ -483,16 +521,34 @@ pub fn facade(class: FacadeClass) -> FacadeMaps {
             // is reflecting sky rather than the street opposite.
             let tint = hash01(cell.column, cell.row, seed) * 0.10;
             let sky = cell.up_pane * 0.16;
-            let blind = if hash01(cell.column, cell.row, seed + 3) > 0.82 {
+            // A shop window is lit from inside during the day too, and has
+            // something in it; it never goes as dark as an office pane.
+            let shop = if cell.ground { 0.20 } else { 0.0 };
+            let blind = if !cell.ground && hash01(cell.column, cell.row, seed + 3) > 0.82 {
                 // Some panes have a blind pulled down.
                 0.22
             } else {
                 0.0
             };
+            let (sky, blind) = (sky + shop, blind);
             return [
                 byte(0.17 + sky * 0.8 + tint + blind),
                 byte(0.20 + sky * 0.95 + tint + blind),
                 byte(0.25 + sky + tint + blind * 0.9),
+                255,
+            ];
+        }
+
+        // The sign board over a shop: a painted panel, darker than the wall and
+        // its own colour per bay, which is what makes a parade of shops read as
+        // separate businesses rather than one long building.
+        if cell.fascia > 0.5 {
+            let shade = 0.20 + hash01(cell.column, 7, seed + 41) * 0.35;
+            let warm = hash01(cell.column, 9, seed + 43);
+            return [
+                byte(shade * (0.7 + warm * 0.5)),
+                byte(shade * (0.7 + (1.0 - warm) * 0.4)),
+                byte(shade * 0.9),
                 255,
             ];
         }
@@ -559,7 +615,7 @@ pub fn facade(class: FacadeClass) -> FacadeMaps {
         // Only the two features that are genuinely three-dimensional. Adding
         // the wall's colour noise here as well made a flat facade look like
         // poured concrete that had gone off badly.
-        let reveal = 0.75 - cell.pane * 0.55;
+        let reveal = 0.75 - cell.pane * 0.55 + cell.fascia * 0.22;
         reveal - smoothstep01(1.0 - storey / 0.04) * 0.22
     };
     let normal = normal_map(MASK_SIZE, 0.018, height);
@@ -634,6 +690,59 @@ mod tests {
         // Indices address the material table, so they must be dense and unique.
         for (i, class) in FacadeClass::ALL.iter().enumerate() {
             assert_eq!(class.index(), i);
+        }
+    }
+
+    #[test]
+    fn the_ground_storey_is_shops_and_the_ones_above_are_not() {
+        // Sampled up the middle of the first bay: the shopfront has to be
+        // taller than the pane above it, or it is just another window and the
+        // street has no eye level.
+        let class = FacadeClass::Midrise;
+        let (_, rows) = class.grid();
+        let glass_run = |storey: f32| {
+            (0..400)
+                .filter(|i| {
+                    let v = (storey + *i as f32 / 400.0) / rows;
+                    cell_at(class, 0.5 / class.grid().0, v).glass
+                })
+                .count()
+        };
+        assert!(
+            glass_run(0.0) > glass_run(1.0),
+            "the shopfront is no taller than the flat above it"
+        );
+    }
+
+    #[test]
+    fn houses_have_no_shop_windows() {
+        // A front door and the same windows as upstairs. Giving a terrace a
+        // shopfront turns a residential street into a high street.
+        assert!(!FacadeClass::House.has_shopfronts());
+        for class in [
+            FacadeClass::Lowrise,
+            FacadeClass::Midrise,
+            FacadeClass::Tower,
+        ] {
+            assert!(class.has_shopfronts(), "{class:?} should have shops");
+        }
+    }
+
+    #[test]
+    fn sign_boards_only_hang_over_shops() {
+        let class = FacadeClass::Midrise;
+        let (columns, rows) = class.grid();
+        let u = 0.5 / columns;
+        // Somewhere in the sign band of the ground storey.
+        assert!(cell_at(class, u, 0.88 / rows).fascia > 0.5);
+        // The same height in every storey above it is plain wall.
+        for storey in 1..rows as u32 {
+            let v = (storey as f32 + 0.88) / rows;
+            assert_eq!(
+                cell_at(class, u, v).fascia,
+                0.0,
+                "a sign board turned up on storey {storey}"
+            );
         }
     }
 
