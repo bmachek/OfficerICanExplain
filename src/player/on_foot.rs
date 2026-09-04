@@ -64,9 +64,9 @@ impl Plugin for OnFootPlugin {
 fn spawn_player(
     mut commands: Commands,
     city: Res<City>,
-    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut configs: ResMut<Assets<PlayerSchemeConfig>>,
+    figures: Res<crate::ai::figure::FigureAssets>,
 ) {
     // Start on an actual street rather than at the origin, which is usually
     // inside a downtown block.
@@ -76,19 +76,11 @@ fn spawn_player(
         .map(|id| city.graph.node(id).pos)
         .unwrap_or(Vec2::ZERO);
 
-    commands.spawn((
+    let mut player = commands.spawn((
         Name::new("Player"),
         Player,
-        Mesh3d(meshes.add(Capsule3d {
-            radius: CAPSULE_RADIUS,
-            half_length: CAPSULE_LENGTH * 0.5,
-        })),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.85, 0.35, 0.28),
-            perceptual_roughness: 0.7,
-            ..default()
-        })),
         Transform::from_xyz(start.x, SIDEWALK_HEIGHT + FLOAT_HEIGHT + 0.2, start.y),
+        Visibility::default(),
         RigidBody::Dynamic,
         Collider::capsule(CAPSULE_RADIUS, CAPSULE_LENGTH),
         // Tnua corrects tipping, but locking rotation stops the capsule from
@@ -118,6 +110,16 @@ fn spawn_player(
         crate::combat::health::Health::new(100.0),
         crate::combat::weapons::Weapon::new(crate::combat::weapons::WeaponKind::Pistol, 90),
     ));
+
+    // The same figure the crowd wears, in a jacket that reads at a distance —
+    // in a third-person game the player is on screen more than anything else.
+    let coat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.62, 0.20, 0.17),
+        perceptual_roughness: 0.82,
+        ..default()
+    });
+    let mut rng = crate::core::rng::stream_for(0, crate::core::rng::stream::PEDESTRIANS);
+    crate::ai::figure::dress(&mut player, &figures, coat, &mut rng);
 }
 
 fn drive_player(

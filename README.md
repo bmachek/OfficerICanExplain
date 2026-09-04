@@ -67,7 +67,7 @@ following and start ramming.
 | `world` | City generator, road graph, chunk streaming, day/night, lights, street furniture |
 | `player` | Input mapping, character controller, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, damage, parked-car spawning |
-| `ai` | Traffic, pedestrians, police pursuit, shared steering |
+| `ai` | Traffic, pedestrians, police pursuit, shared steering, walk cycles |
 | `crime` | Crime kinds, witnesses, the wanted level |
 | `combat` | Health, armour, hitscan weapons |
 | `mission` | Objective state machine, mission chain, money |
@@ -165,6 +165,21 @@ city stands on the street grid, so the dominant axis of the normal *is* the
 plane the wall lies in — there is no diagonal face for a triplanar blend's
 seams to show up on. Glass is masked out by metalness, which the facade's own
 surface map already carries.
+
+## People
+
+A pedestrian was a capsule, which reads as a person at fifty metres and as a
+bollard at five — and five metres is where pedestrians matter, because they are
+the witnesses, the victims and the crowd that scatters when a car mounts the
+kerb. They are now figures: torso, head, two arms, two legs, hung off the same
+entity the capsule collider is still on. Nothing about the physics or the
+line-of-sight checks changed.
+
+Limbs pivot at the joint rather than at their centre, which is why each is an
+entity at the shoulder or hip with its mesh hung below it — rotating a centred
+capsule swings it about its middle, and a leg that does that is not walking.
+The stride is paced by distance covered rather than by time, so running takes
+faster steps instead of longer ones. The player wears the same figure.
 
 ## Weather
 

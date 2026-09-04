@@ -1,5 +1,6 @@
 //! Agents that inhabit the city: traffic now, pedestrians and police to follow.
 
+pub mod figure;
 pub mod pedestrian;
 pub mod police;
 pub mod steering;
