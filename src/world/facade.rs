@@ -35,7 +35,8 @@ pub struct FacadeSettings {
     /// anything in the photograph, and brighter.
     pub strength: f32,
     pub relief: f32,
-    pub _pad: f32,
+    /// Above 0.5, the grain is sampled turned ninety degrees.
+    pub swap: f32,
 }
 
 impl Default for FacadeSettings {
@@ -44,7 +45,7 @@ impl Default for FacadeSettings {
             tile: GRAIN_TILE,
             strength: 0.70,
             relief: 0.90,
-            _pad: 0.0,
+            swap: 0.0,
         }
     }
 }
@@ -80,25 +81,48 @@ impl Plugin for FacadePlugin {
 }
 
 /// Which scanned set a district's walls are made of.
-///
-/// Only two, because these are the two things a city is actually built from at
-/// this distance. Anything more is a variety problem, not a material one.
 pub fn grain_for(district: super::citygen::District) -> &'static str {
     use super::citygen::District::*;
     match district {
-        Residential => set::BRICK,
-        Downtown | Midtown | Industrial | Park => set::CONCRETE,
+        Residential | Midtown => set::BRICK,
+        Downtown | Industrial | Park => set::CONCRETE,
     }
 }
+
+/// How the grain is dressed for each of a district's palette slots.
+///
+/// One scanned set has to furnish a whole district, so the variety has to come
+/// from how it is *used*. Scale is the strongest lever — the same brick at
+/// 1.7m and at 3.0m reads as two different bricks, because what the eye
+/// measures is the course height against the storey — and a quarter turn on
+/// half of them breaks the last of the resemblance. Both are free: they are
+/// numbers in a uniform that already exists, so the city's material count does
+/// not move.
+const DRESS: [(f32, f32, bool); 4] = [
+    (1.75, 0.72, false),
+    (2.40, 0.62, true),
+    (2.05, 0.80, true),
+    (3.00, 0.66, false),
+];
 
 impl FacadeGrain {
     /// The grain for one district, or a bare extension if it was never
     /// downloaded — in which case the shader multiplies by a white texture and
     /// the painted facade shows through untouched.
-    pub fn for_district(library: &MaterialLibrary, district: super::citygen::District) -> Self {
+    pub fn for_district(
+        library: &MaterialLibrary,
+        district: super::citygen::District,
+        palette: usize,
+    ) -> Self {
         let scanned = library.get(grain_for(district));
+        let (tile, strength, swap) = DRESS[palette % DRESS.len()];
         Self {
-            settings: FacadeSettings::default(),
+            settings: FacadeSettings {
+                tile,
+                strength,
+                swap: if swap { 1.0 } else { 0.0 },
+                ..FacadeSettings::default()
+            },
             color: scanned.map(|s| s.color.clone()),
             normal: scanned.map(|s| s.normal.clone()),
         }
@@ -120,10 +144,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn brick_goes_on_houses_and_concrete_on_everything_else() {
+    fn brick_goes_where_people_live_and_concrete_where_they_work() {
         assert_eq!(grain_for(District::Residential), set::BRICK);
+        assert_eq!(grain_for(District::Midtown), set::BRICK);
         assert_eq!(grain_for(District::Downtown), set::CONCRETE);
         assert_eq!(grain_for(District::Industrial), set::CONCRETE);
+    }
+
+    #[test]
+    fn no_two_palette_slots_are_dressed_the_same() {
+        // The whole point of the dressing table is that a district's four
+        // slots do not look like four copies of one photograph. Two slots
+        // agreeing on both scale and orientation would be exactly that.
+        for (i, a) in DRESS.iter().enumerate() {
+            for b in &DRESS[i + 1..] {
+                assert!(
+                    (a.0 - b.0).abs() > 0.15 || a.2 != b.2,
+                    "two slots share a dressing: {a:?} and {b:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_dressing_is_a_usable_one() {
+        for (tile, strength, _) in DRESS {
+            assert!(
+                (1.0..=4.0).contains(&tile),
+                "a wall grain tiled at {tile}m is either mush or wallpaper"
+            );
+            assert!((0.0..=1.0).contains(&strength));
+        }
     }
 
     #[test]

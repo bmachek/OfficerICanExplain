@@ -150,6 +150,13 @@ a two-storey house and a forty-storey tower share one material. Anchoring it to
 the building instead would need a size bucket per material and take the city
 from twenty-odd draw calls to several hundred.
 
+One set has to furnish a whole district, so the variety comes from how it is
+used: each of a district's four palette slots dresses the grain at a different
+scale, and turns half of them a quarter turn. Scale is the strongest lever,
+because what the eye measures is the course height against the storey. Both are
+numbers in a uniform that already exists, so the city's material count does not
+move.
+
 The shader picks one projection rather than blending three. Every wall in this
 city stands on the street grid, so the dominant axis of the normal *is* the
 plane the wall lies in — there is no diagonal face for a triplanar blend's
@@ -211,7 +218,9 @@ pursuit, and everything but the player's own car is positioned in the world.
   Scanning them needs a custom material with a detail UV; see above.
 - Bodywork has no crease lines. The cross-sections give a shoulder that turns
   quickly, which reads as one, but nothing in the mesh is a hard edge.
-- One scanned set per surface, so a whole district is built of the same brick.
+- One scanned set per surface. A district's four palette slots dress it at
+  different scales and orientations, which is most of the way there, but every
+  brick wall in the city is still the same photograph underneath.
 - Damage does not change how a car collides: dents move metal, never the box
   the physics uses. Rebuilding a convex hull per impact is the alternative.
 

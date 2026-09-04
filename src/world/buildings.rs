@@ -229,10 +229,11 @@ pub fn build_assets(
 
     let mut building = Vec::with_capacity(districts.len() * PALETTE_SIZE as usize * CLASS_COUNT);
     for district in districts {
-        // The wall grain is a property of the district, not of the building:
-        // houses are brick, everything else is concrete.
-        let grain = super::facade::FacadeGrain::for_district(library, district);
-        for color in palette(district) {
+        for (slot, color) in palette(district).into_iter().enumerate() {
+            // The grain is the district's, but how it is dressed — scale, and
+            // whether it is turned — belongs to the palette slot, so a street
+            // of one district is not a street of one photograph.
+            let grain = super::facade::FacadeGrain::for_district(library, district, slot);
             for (base, emissive, surface, normal) in &facades {
                 building.push(facades_out.add(super::facade::FacadeMaterial {
                     base: StandardMaterial {

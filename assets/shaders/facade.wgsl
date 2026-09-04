@@ -26,7 +26,8 @@ struct FacadeSettings {
     strength: f32,
     // How far its normal map is allowed to tilt the surface.
     relief: f32,
-    _pad: f32,
+    // Above 0.5, the grain is sampled turned ninety degrees.
+    swap: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> settings: FacadeSettings;
@@ -59,7 +60,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         plane = pbr_input.world_position.xy;
         tangent = vec3(1.0, 0.0, 0.0);
     }
-    let uv = plane / settings.tile;
+    // Turning the grain a quarter turn is enough to stop two walls cut from the
+    // same photograph reading as the same wall — cheaper than a second scan,
+    // and it costs nothing per fragment.
+    var uv = plane / settings.tile;
+    if settings.swap > 0.5 {
+        uv = uv.yx;
+    }
 
     // Glass is the metallic part of a facade and the wall is not, so metalness
     // is already a mask for "is this a window" — no extra channel needed.
@@ -79,7 +86,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         pbr_input.material.base_color.a,
     );
 
-    let packed = textureSample(grain_normal, grain_normal_sampler, uv).xyz * 2.0 - 1.0;
+    var packed = textureSample(grain_normal, grain_normal_sampler, uv).xyz * 2.0 - 1.0;
+    if settings.swap > 0.5 {
+        // The relief has to turn with the colour, or the mortar shadows fall
+        // across courses that are not there.
+        packed = vec3(packed.y, packed.x, packed.z);
+    }
     let bitangent = cross(pbr_input.world_normal, tangent);
     let tilt = (tangent * packed.x + bitangent * packed.y) * settings.relief * wall;
     pbr_input.N = normalize(pbr_input.N + tilt);
