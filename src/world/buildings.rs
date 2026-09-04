@@ -52,7 +52,7 @@ pub struct CityAssets {
     /// A 1x1 quad in the XZ plane, laid over each block as its walking surface.
     unit_quad: Handle<Mesh>,
     /// Indexed by `(district_index * PALETTE_SIZE + palette) * CLASS_COUNT + class`.
-    building: Vec<Handle<StandardMaterial>>,
+    building: Vec<Handle<super::facade::FacadeMaterial>>,
     roof: Handle<StandardMaterial>,
     kerb: Handle<StandardMaterial>,
     park_kerb: Handle<StandardMaterial>,
@@ -202,6 +202,7 @@ pub fn build_assets(
     materials: &mut Assets<StandardMaterial>,
     images: &mut Assets<Image>,
     library: &super::material::MaterialLibrary,
+    facades_out: &mut Assets<super::facade::FacadeMaterial>,
 ) -> CityAssets {
     let districts = [
         District::Downtown,
@@ -228,19 +229,25 @@ pub fn build_assets(
 
     let mut building = Vec::with_capacity(districts.len() * PALETTE_SIZE as usize * CLASS_COUNT);
     for district in districts {
+        // The wall grain is a property of the district, not of the building:
+        // houses are brick, everything else is concrete.
+        let grain = super::facade::FacadeGrain::for_district(library, district);
         for color in palette(district) {
             for (base, emissive, surface, normal) in &facades {
-                building.push(materials.add(StandardMaterial {
-                    base_color: color,
-                    base_color_texture: Some(base.clone()),
-                    emissive_texture: Some(emissive.clone()),
-                    // Dark until dusk; `timeofday::light_windows` drives it.
-                    emissive: LinearRgba::BLACK,
-                    metallic_roughness_texture: Some(surface.clone()),
-                    normal_map_texture: Some(normal.clone()),
-                    perceptual_roughness: 1.0,
-                    metallic: 1.0,
-                    ..default()
+                building.push(facades_out.add(super::facade::FacadeMaterial {
+                    base: StandardMaterial {
+                        base_color: color,
+                        base_color_texture: Some(base.clone()),
+                        emissive_texture: Some(emissive.clone()),
+                        // Dark until dusk; `timeofday::light_windows` drives it.
+                        emissive: LinearRgba::BLACK,
+                        metallic_roughness_texture: Some(surface.clone()),
+                        normal_map_texture: Some(normal.clone()),
+                        perceptual_roughness: 1.0,
+                        metallic: 1.0,
+                        ..default()
+                    },
+                    extension: grain.clone(),
                 }));
             }
         }
@@ -334,14 +341,14 @@ impl CityAssets {
         district: District,
         palette: u8,
         class: FacadeClass,
-    ) -> Handle<StandardMaterial> {
+    ) -> Handle<super::facade::FacadeMaterial> {
         let slot = district_index(district) * PALETTE_SIZE as usize + palette as usize;
         let i = slot * CLASS_COUNT + class.index();
         self.building[i.min(self.building.len() - 1)].clone()
     }
 
     /// Every facade material, for the day/night cycle to light up.
-    pub fn building_materials(&self) -> &[Handle<StandardMaterial>] {
+    pub fn building_materials(&self) -> &[Handle<super::facade::FacadeMaterial>] {
         &self.building
     }
 }

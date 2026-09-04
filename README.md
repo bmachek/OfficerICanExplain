@@ -141,10 +141,20 @@ the panes are genuinely recessed, and an emissive mask marking which windows
 are lit. `timeofday` ramps the emissive strength, which is why the city fills
 with light at dusk without a single extra light source.
 
-Facades are still painted rather than scanned. A scan cannot be stretched over
-a whole tower face without smearing, and tiling it per storey would repeat the
-lit-window pattern with it — which is the one thing that must not repeat. Doing
-both needs a material with a second, independent detail UV.
+Facades get both. The painted texture holds what is *about* the building —
+where the windows are, which are lit, where the floor lines fall — and a
+scanned brick or concrete grain is sampled on top of it in **world space**,
+through `assets/shaders/facade.wgsl`. Sampling in world space rather than in
+the mesh's UV is what makes it work: the grain's scale belongs to the world, so
+a two-storey house and a forty-storey tower share one material. Anchoring it to
+the building instead would need a size bucket per material and take the city
+from twenty-odd draw calls to several hundred.
+
+The shader picks one projection rather than blending three. Every wall in this
+city stands on the street grid, so the dominant axis of the normal *is* the
+plane the wall lies in — there is no diagonal face for a triplanar blend's
+seams to show up on. Glass is masked out by metalness, which the facade's own
+surface map already carries.
 
 ## Vehicles
 
@@ -201,6 +211,7 @@ pursuit, and everything but the player's own car is positioned in the world.
   Scanning them needs a custom material with a detail UV; see above.
 - Bodywork has no crease lines. The cross-sections give a shoulder that turns
   quickly, which reads as one, but nothing in the mesh is a hard edge.
+- One scanned set per surface, so a whole district is built of the same brick.
 - Damage does not change how a car collides: dents move metal, never the box
   the physics uses. Rebuilding a convex hull per impact is the alternative.
-- There is one scanned set per surface, so a whole district paves identically.
+

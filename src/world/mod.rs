@@ -2,6 +2,7 @@
 
 pub mod buildings;
 pub mod citygen;
+pub mod facade;
 pub mod material;
 pub mod roadgraph;
 pub mod streaming;
@@ -26,11 +27,13 @@ impl Plugin for WorldPlugin {
         app.add_plugins((
             PhysicsPlugins::default(),
             material::MaterialLibraryPlugin,
+            facade::FacadePlugin,
             timeofday::TimeOfDayPlugin,
             streetlights::StreetLightPlugin,
         ))
         .init_resource::<streaming::ActiveChunks>()
         .init_resource::<streaming::StreamTimer>()
+        .add_systems(PreStartup, facade::load_shader)
         .add_systems(Startup, (generate_city, setup_ground))
         .add_systems(Update, streaming::update_streaming);
     }
@@ -43,6 +46,7 @@ fn generate_city(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     library: Res<material::MaterialLibrary>,
+    mut facades: ResMut<Assets<facade::FacadeMaterial>>,
 ) {
     let started = std::time::Instant::now();
     let layout = citygen::generate(config.world_seed, config.world.half_extent);
@@ -64,6 +68,7 @@ fn generate_city(
         &mut materials,
         &mut images,
         &library,
+        &mut facades,
     ));
 }
 

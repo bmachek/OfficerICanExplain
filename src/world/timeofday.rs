@@ -209,7 +209,7 @@ fn apply_sky(
 fn light_windows(
     clock: Res<TimeOfDay>,
     assets: Option<Res<CityAssets>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<crate::world::facade::FacadeMaterial>>,
     mut applied: Local<Option<f32>>,
 ) {
     // The city is generated a frame or two before this first runs.
@@ -225,7 +225,7 @@ fn light_windows(
     let glow = level * WINDOW_GLOW;
     for handle in assets.building_materials() {
         if let Some(mut material) = materials.get_mut(handle) {
-            material.emissive = LinearRgba::rgb(glow, glow, glow);
+            material.base.emissive = LinearRgba::rgb(glow, glow, glow);
         }
     }
 }
