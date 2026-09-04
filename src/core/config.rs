@@ -7,6 +7,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::render::quality::GraphicsSettings;
+
 #[derive(Resource, Debug, Clone, Serialize, Deserialize)]
 pub struct GameConfig {
     /// Everything about world layout derives from this. Same seed, same city.
@@ -14,6 +16,10 @@ pub struct GameConfig {
     pub world: WorldConfig,
     pub camera: CameraConfig,
     pub audio: AudioConfig,
+    /// What the renderer is allowed to spend. Resolved from a single quality
+    /// preset and then walked back to what the GPU actually supports; see
+    /// [`crate::render::quality`].
+    pub graphics: GraphicsSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +80,7 @@ impl Default for GameConfig {
                 effects: 1.0,
                 ambience: 0.5,
             },
+            graphics: GraphicsSettings::default(),
         }
     }
 }

@@ -15,6 +15,7 @@ use crate::player::camera::CameraRig;
 use crate::player::input::Action;
 use crate::player::interact::Driving;
 use crate::player::on_foot::Player;
+use crate::render::quality::{AoQuality, Capabilities, QualityPreset};
 use crate::vehicle::controller::VehicleState;
 use crate::vehicle::damage::VehicleHealth;
 use crate::vehicle::spec::VehicleSpec;
@@ -31,6 +32,7 @@ impl Plugin for DebugUiPlugin {
 fn tuning_panel(
     mut contexts: EguiContexts,
     mut config: ResMut<GameConfig>,
+    caps: Res<Capabilities>,
     state: Res<State<AppState>>,
     cameras: Query<(&Transform, &CameraRig)>,
     actions: Query<&ActionState<Action>>,
@@ -77,6 +79,9 @@ fn tuning_panel(
             ui.add(egui::Slider::new(&mut config.world.wetness, 0.0..=1.0).text("wetness"));
 
             ui.separator();
+            graphics_section(ui, &mut config, &caps);
+
+            ui.separator();
             ui.label(egui::RichText::new("input").strong());
             if let Ok(action_state) = actions.single() {
                 let movement = action_state.clamped_axis_pair(&Action::Move);
@@ -102,6 +107,68 @@ fn tuning_panel(
         });
 
     Ok(())
+}
+
+/// Renderer tier, and what it resolved to.
+///
+/// Picking a preset re-derives the whole block, which is the point: these
+/// settings are meant to be compared as coherent tiers rather than mixed by
+/// hand. The individual toggles below it are still editable, because judging
+/// whether one effect is worth its cost means being able to turn exactly that
+/// one off — but they are shown as what they are, a deviation from the preset.
+fn graphics_section(ui: &mut egui::Ui, config: &mut GameConfig, caps: &Capabilities) {
+    ui.label(egui::RichText::new("graphics").strong());
+
+    let requested = config.graphics.requested;
+    let mut chosen = requested;
+    egui::ComboBox::from_label("preset")
+        .selected_text(requested.name())
+        .show_ui(ui, |ui| {
+            for preset in QualityPreset::ALL {
+                ui.selectable_value(&mut chosen, preset, preset.name());
+            }
+        });
+    if chosen != requested {
+        // Straight back through the same downgrade the startup probe ran, so a
+        // preset picked here can never ask for more than the GPU has.
+        config.graphics = chosen.settings().downgrade(*caps);
+    }
+
+    if !caps.raytracing {
+        ui.label(
+            egui::RichText::new("no ray query on this GPU — raytracing tiers fall back")
+                .small()
+                .weak(),
+        );
+    }
+
+    let g = &mut config.graphics;
+    ui.checkbox(&mut g.contact_shadows, "contact shadows");
+    ui.checkbox(&mut g.soft_shadows, "soft shadows (PCSS)");
+    ui.checkbox(&mut g.ssr, "screen-space reflections");
+    ui.checkbox(&mut g.motion_blur, "motion blur");
+    ui.checkbox(&mut g.depth_of_field, "depth of field");
+
+    let mut ao_on = g.ssao.is_some();
+    if ui.checkbox(&mut ao_on, "ambient occlusion").changed() {
+        g.ssao = ao_on.then_some(AoQuality::High);
+    }
+
+    ui.add(
+        egui::Slider::new(&mut g.shadow_distance, 100.0..=2000.0)
+            .text("shadow distance")
+            .suffix(" m"),
+    );
+    ui.add(egui::Slider::new(&mut g.lod_scale, 0.25..=3.0).text("lod scale"));
+
+    ui.label(
+        egui::RichText::new(format!(
+            "volumetrics {:?} · upscaling {:?} · {}x shadow map",
+            g.volumetrics, g.upscaling, g.shadow_map_size,
+        ))
+        .small()
+        .weak(),
+    );
 }
 
 /// Live handling tuning for whatever the player is driving.
