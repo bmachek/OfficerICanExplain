@@ -73,16 +73,41 @@ following and start ramming.
 | `mission` | Objective state machine, mission chain, money |
 | `ui` | HUD, minimap, dev tuning panel |
 | `save` | RON quick save / load |
-| `render` | Atmosphere, exposure, bloom, ambient occlusion, anti-aliasing |
+| `render` | Quality presets, atmosphere, exposure, bloom, shadows, ambient occlusion, anti-aliasing |
 | `audio` | Sound synthesis, the sound bank, and what triggers what |
 
 The world is fully reproducible from `GameConfig::world_seed`, so a save stores
 only what cannot be derived: position, money, health, heat and mission progress.
 
+## Quality
+
+Everything the renderer is allowed to spend is decided by one preset, resolved
+in `render::quality` into a flat block of numbers that the rest of `render`
+reads. Five tiers, `low` through `photo`; `high` is the default.
+
+```sh
+cargo run                        # high
+cargo run -- --screenshot shots/x.png --quality ultra
+```
+
+A preset is a *request*, not a promise. At startup the GPU is asked what it
+supports and the settings are walked back to fit — asking for raytracing on
+hardware with no ray query falls back to screen-space reflections and ambient
+occlusion, rather than to a black screen. The dev panel picks a preset live and
+lets individual effects be toggled off it, which is the only way to find out
+what one of them actually costs.
+
+Raytracing and DLSS are cargo features rather than defaults, because one pulls
+in acceleration-structure building and the other needs a vendor SDK:
+
+```sh
+cargo run --features raytracing
+```
+
 ## Development
 
 ```sh
-cargo test                                  # 87 tests
+cargo test                                  # 205 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -102,6 +127,13 @@ cargo run -- --screenshot shots/drive.png  --follow --drive --frames 2000
 cargo run -- --screenshot shots/map.png    --follow --map
 ```
 
+`tools/shoot.sh` renders the whole battery — aerial, street, dusk, night, rain,
+bodywork, showroom, driving, map — so a rendering change can be judged against
+the last one rather than against a memory of it. `--all-presets` shoots every
+tier into `shots/<preset>/`, and frame times are collected at the end, because
+a screenshot says a change looks right and says nothing about whether it can be
+afforded.
+
 | Flag | Effect |
 |---|---|
 | `--at x,y,z` / `--look x,y,z` | Camera pose |
@@ -117,6 +149,8 @@ cargo run -- --screenshot shots/map.png    --follow --map
 | `--hour H` | Freeze the clock at hour H |
 | `--stream-radius M` | Load more of the city than a player would |
 | `--frames N` | Frames to render before capturing |
+| `--quality Q` | Renderer tier: `low`, `medium`, `high`, `ultra`, `photo` |
+| `--fps-log` | Log median, p95 and worst frame time alongside the shot |
 
 ## Textures
 
@@ -180,6 +214,55 @@ entity at the shoulder or hip with its mesh hung below it — rotating a centred
 capsule swings it about its middle, and a leg that does that is not walking.
 The stride is paced by distance covered rather than by time, so running takes
 faster steps instead of longer ones. The player wears the same figure.
+
+## Roofs
+
+A building was two boxes: a wall and a capping slab. From the pavement that is
+nearly enough, because you cannot see a roof from the pavement. From anywhere
+with height it was the most damning view in the game — four thousand identical
+white rectangles, a circuit board rather than a skyline.
+
+Two levers, kept separate because they cost completely different things. The
+**parapet varies per building** — height and overhang drawn from the building's
+own seed. That is free, because the slab was already an entity with its own
+transform, and it is the half that still reads from a kilometre up where an
+air-conditioning unit is a fraction of a pixel. **Clutter sits on the deck** —
+plant, extract stacks, water tanks, the stair head that had to surface
+somewhere, an aerial nobody took down. That costs a draw call each, so it
+carries a visibility range and stops being drawn well before it stops being
+resolvable.
+
+Placement is a coarse grid with jitter inside each cell, sampled without
+replacement. Two pieces cannot occupy the same volume whatever the RNG does,
+and it terminates in a fixed number of steps rather than in however many tries
+overlap-testing needs. The seed comes from the footprint rather than from a
+spawn counter, because chunks regenerate whenever the player walks back into
+them and a counter would re-roll a different roof each time.
+
+## Shadows
+
+Shadows were the largest single thing wrong with the picture, and none of it
+was subtle once you knew to look. They **stopped at 150 metres**, because
+nothing ever configured the cascades and Bevy's default is a distance chosen
+for a game in a room — in a city streamed out to nine hundred, the far half of
+the skyline was lit from every direction at once. Nothing was **planted**: a
+shadow map texel covering half a metre cannot resolve the gap between a bollard
+and the pavement it stands on, so the bollard floated, and so did every wheel
+and every lamp post. And every edge was **equally hard**, whether cast by a
+parapet forty metres up or by a wing mirror ten centimetres off a door.
+
+Three fixes, deliberately different in kind. The cascade split is *geometry* —
+it decides which distances are shadow-mapped at all, and it is now derived from
+the streaming radius, because shadowing a building that was never spawned costs
+resolution and buys an empty map. Contact shadows are a *screen-space* pass
+that puts back the short dark contact no shadow map resolution can afford.
+Soft shadows are *filtering*: the penumbra widens with distance from the
+caster, the way a real one does.
+
+The shadow filter follows the upscaling setting rather than the quality tier.
+`Temporal` varies its sample pattern between frames and is only good *because*
+something resolves that variation afterwards; with no temporal pass it is
+noise.
 
 ## Weather
 
@@ -257,6 +340,11 @@ pursuit, and everything but the player's own car is positioned in the world.
 
 - Weather is a dial rather than a system: nothing decides when it rains, and
   nothing dries out.
+
+- Buildings are still an extrusion with a parapet and roof clutter on top.
+  Window reveals, cornices and balconies are geometry the facade texture only
+  implies, and adding them needs the level-of-detail system that the roof
+  clutter and the plinth course currently only sketch.
 
 - Pedestrians cross roads wherever their route turns, rather than at crossings.
 - Traffic has no right-of-way rules at junctions; it brakes for obstacles only.

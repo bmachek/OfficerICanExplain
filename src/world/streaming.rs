@@ -126,7 +126,7 @@ pub fn update_streaming(
     assets: Res<CityAssets>,
     paint: Res<MarkingAssets>,
     props: Res<PropAssets>,
-    config_seed: Res<GameConfig>,
+    roofs: Res<crate::world::rooftop::RoofKit>,
     mut active: ResMut<ActiveChunks>,
     mut timer: ResMut<StreamTimer>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
@@ -141,17 +141,23 @@ pub fn update_streaming(
     let desired = index.desired(focus, config.world.stream_radius);
 
     let arriving: Vec<IVec2> = desired.difference(&active.0).copied().collect();
+    let ctx = crate::world::buildings::BlockContext {
+        assets: &assets,
+        roofs: &roofs,
+        seed: config.world_seed,
+        lod_scale: config.graphics.lod_scale,
+    };
     for chunk in arriving {
         if let Some(block_indices) = index.blocks_in(chunk) {
             for &i in block_indices {
-                spawn_block(&mut commands, &assets, &city.blocks[i], chunk);
+                spawn_block(&mut commands, &ctx, &city.blocks[i], chunk);
             }
         }
         if let Some(streets) = index.streets_in(chunk) {
             // One stream per chunk, so a chunk's furniture is identical every
             // time it is walked back into rather than reshuffling.
             let mut rng = crate::core::rng::stream_for_chunk(
-                config_seed.world_seed,
+                config.world_seed,
                 crate::core::rng::stream::PROPS,
                 (chunk.x, chunk.y),
             );

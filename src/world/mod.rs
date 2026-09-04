@@ -7,6 +7,7 @@ pub mod markings;
 pub mod material;
 pub mod props;
 pub mod roadgraph;
+pub mod rooftop;
 pub mod streaming;
 pub mod streetlights;
 pub mod texture;
@@ -69,6 +70,7 @@ fn generate_city(
     commands.insert_resource(streaming::ChunkIndex::build(&city));
     commands.insert_resource(city);
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(rooftop::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(markings::build_assets(
         &mut meshes,
         &mut materials,
