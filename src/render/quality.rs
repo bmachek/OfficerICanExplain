@@ -299,15 +299,6 @@ impl GraphicsSettings {
         self
     }
 
-    /// True when the opaque pass has to run deferred.
-    ///
-    /// Both reflections and raytracing read a g-buffer, so this is what decides
-    /// `DefaultOpaqueRendererMethod` — and, downstream of it, whether the facade
-    /// material shades in its forward or its deferred fragment shader.
-    pub fn needs_deferred(&self) -> bool {
-        self.ssr || self.raytracing
-    }
-
     /// True when something on the camera consumes motion vectors.
     ///
     /// TAA, DLSS and motion blur all need the same prepass, and asking for it
@@ -416,8 +407,6 @@ mod tests {
                 "{} lost its occlusion term entirely",
                 preset.name()
             );
-            // Still needs a g-buffer, because the fallback is itself deferred.
-            assert!(settings.needs_deferred());
         }
     }
 
@@ -446,14 +435,6 @@ mod tests {
             let once = preset.settings().downgrade(bare);
             assert_eq!(once.clone().downgrade(bare), once);
         }
-    }
-
-    #[test]
-    fn the_deferred_path_is_asked_for_exactly_when_something_reads_a_gbuffer() {
-        assert!(!QualityPreset::Low.settings().needs_deferred());
-        assert!(!QualityPreset::Medium.settings().needs_deferred());
-        assert!(QualityPreset::High.settings().needs_deferred());
-        assert!(QualityPreset::Ultra.settings().needs_deferred());
     }
 
     #[test]

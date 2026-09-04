@@ -64,7 +64,7 @@ following and start ramming.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, tunables, deterministic RNG, screenshot tool |
-| `world` | City generator, road graph, chunk streaming, day/night, lights, street furniture |
+| `world` | City generator, road graph, chunk streaming, day/night, lights, street furniture, roofs, wet roads |
 | `player` | Input mapping, character controller, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, damage, parked-car spawning |
 | `ai` | Traffic, pedestrians, police pursuit, shared steering, walk cycles |
@@ -107,7 +107,7 @@ cargo run --features raytracing
 ## Development
 
 ```sh
-cargo test                                  # 205 tests
+cargo test                                  # 208 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -239,6 +239,29 @@ overlap-testing needs. The seed comes from the footprint rather than from a
 spawn counter, because chunks regenerate whenever the player walks back into
 them and a counter would re-roll a different roof each time.
 
+## Deferred
+
+The opaque pass writes a g-buffer rather than shading in place, at every quality
+tier. Not a setting, even though only the upper ones strictly need it: which
+pipeline a material compiles for is settled when the material is prepared, so
+flipping it at runtime leaves already-specialised pipelines behind and geometry
+disappears — and a city lit by sixty-four street lamps and a pair of headlights
+is the case deferred shading exists for.
+
+Two things follow. Screen-space reflections become possible at all, which is
+what puts the lit windows into the wet road. And every material that shades
+opaquely needs a deferred path of its own: the facade and the road both branch
+on `PREPASS_PIPELINE` inside one shader file rather than keeping a second copy,
+because the grain projection and the puddle mask are subtle enough that two
+copies would drift. A material with only a forward shader is not an error — it
+silently writes its base texture into the g-buffer and loses everything the
+extension was for.
+
+The cost is that every camera drawing the world needs a g-buffer to draw into. A
+deferred material is skipped outright by the forward opaque pass rather than
+falling back to it, so the minimap gets one too — at 320 by 320 that is nothing,
+and the alternative is keeping a second renderer path alive for one widget.
+
 ## Shadows
 
 Shadows were the largest single thing wrong with the picture, and none of it
@@ -273,14 +296,26 @@ and far glossier, and at the grazing angles a street is actually seen from it
 stops being a surface and starts being a mirror for the sky and every lit window
 above it.
 
-That mirror comes free — the camera already carries an environment map generated
-from the atmosphere, so dropping the road's roughness is enough. Screen-space
-reflections would be sharper, but Bevy only runs those in a deferred pipeline,
-and this renderer is forward: the facade material's own fragment shader and the
-cars' clearcoat both live there.
+Part of that mirror comes free — the camera already carries an environment map
+generated from the atmosphere, so dropping a surface's roughness is enough to
+reflect the sky. The rest is screen-space reflections, which read a g-buffer and
+so were impossible while the renderer was forward. It is deferred now, and the
+road reflects the lit windows above it rather than only the sky.
 
-Wetness is a dial (`--wet`, or the dev panel), not a simulation. Deciding when
-it rains is a separate job from being able to show it.
+Rain also puddles, which is the half a single wetness number cannot express. A
+road that goes uniformly glossy reads as varnish; a real one holds water in its
+dips and stays damp matte between them. The mask has to be computed in world
+space, because the road is one quad forty kilometres across with its UVs
+multiplied by about six thousand — anything sampled in UV repeats every six
+metres, and puddles on a six-metre grid are a pattern rather than weather.
+
+Standing water also *flattens* what it lies in. Dropping the roughness without
+flattening the asphalt's own normal map leaves every grain of chipping throwing
+its own highlight off a near-mirror, and the road comes out glittering like
+crushed glass. Damp asphalt keeps its texture; a puddle does not have one.
+
+Wetness is still a dial (`--wet`, or the dev panel), not a simulation. Deciding
+when it rains is a separate job from being able to show it.
 
 ## Vehicles
 
@@ -345,6 +380,11 @@ pursuit, and everything but the player's own car is positioned in the world.
   Window reveals, cornices and balconies are geometry the facade texture only
   implies, and adding them needs the level-of-detail system that the roof
   clutter and the plinth course currently only sketch.
+
+- Screen-space reflections can only reflect what is on screen. A car just out of
+  frame stops appearing in the road under it. Light probes do not have that
+  problem and cannot reflect anything that moves; the two are complementary and
+  only one of them is built.
 
 - Pedestrians cross roads wherever their route turns, rather than at crossings.
 - Traffic has no right-of-way rules at junctions; it brakes for obstacles only.

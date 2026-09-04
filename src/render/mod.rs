@@ -40,11 +40,15 @@ pub mod shadows;
 
 use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::camera::{Exposure, Hdr};
+use bevy::core_pipeline::prepass::{DeferredPrepass, DepthPrepass, MotionVectorPrepass};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::atmosphere::ScatteringMedium;
 use bevy::light::{Atmosphere, AtmosphereEnvironmentMapLight};
 use bevy::pbr::AtmosphereSettings;
-use bevy::pbr::{ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel};
+use bevy::pbr::{
+    DefaultOpaqueRendererMethod, ScreenSpaceAmbientOcclusion,
+    ScreenSpaceAmbientOcclusionQualityLevel, ScreenSpaceReflections,
+};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
 use bevy::render::renderer::RenderDevice;
@@ -81,7 +85,22 @@ impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         // The render features themselves ship in `DefaultPlugins`; all this
         // plugin decides is which of them a gameplay camera opts into.
-        app.init_resource::<Capabilities>()
+        // Deferred, for every tier, decided here and never again.
+        //
+        // Not a quality setting, even though only the upper tiers strictly need
+        // it. Which pipeline a material compiles for is settled when the
+        // material is prepared, so flipping this at runtime leaves already-
+        // specialised pipelines behind and geometry disappears; and a city lit
+        // by sixty-four street lamps and a pair of headlights is the case
+        // deferred shading exists for in the first place.
+        //
+        // The cost is that every camera drawing the world now needs a g-buffer
+        // to draw into. A deferred material is skipped outright in the forward
+        // opaque pass, so a camera without `DeferredPrepass` renders nothing at
+        // all rather than rendering something worse — which is why the minimap
+        // gets one too, over in `ui::minimap`.
+        app.insert_resource(DefaultOpaqueRendererMethod::deferred())
+            .init_resource::<Capabilities>()
             .add_systems(Startup, (probe_capabilities, spawn_atmosphere))
             .add_systems(
                 Update,
@@ -226,6 +245,14 @@ fn attach_camera_stack(
                 intensity: 2.2,
                 ..default()
             },
+            // The g-buffer the deferred lighting pass reads, and the depth
+            // buffer every screen-space effect raymarches through. Several
+            // components below would insert these themselves through their
+            // `require`s; naming them here means the camera has them even at a
+            // tier that asks for none of those effects, and the pipeline does
+            // not change shape as the preset moves.
+            DepthPrepass,
+            DeferredPrepass,
             // TAA jitters the projection between frames and resolves the result
             // itself. Multisampling on top would fight it, and is not supported
             // alongside ambient occlusion in any case.
@@ -277,10 +304,59 @@ fn sync_camera_stack(
                 camera.remove::<TemporalAntiAliasing>();
             }
         }
+
+        if settings.ssr {
+            camera.insert(reflections());
+        } else {
+            camera.remove::<ScreenSpaceReflections>();
+        }
+
+        // Motion vectors are wanted by TAA, by DLSS and by motion blur, and
+        // asking for them per-effect is how they end up requested down one code
+        // path and forgotten down another.
+        if settings.needs_motion_vectors() {
+            camera.insert(MotionVectorPrepass);
+        } else {
+            camera.remove::<MotionVectorPrepass>();
+        }
     }
 
     if !cameras.is_empty() {
         *applied = Some(settings.clone());
+    }
+}
+
+/// Screen-space reflections, tuned for a street rather than for a floor.
+///
+/// The defaults assume a broadly flat reflector seen from above. What matters
+/// here is wet asphalt seen at a grazing angle down a road, where a ray travels
+/// a long way across the screen before it hits anything — so the march gets
+/// more steps, and the exponent keeps them dense near the origin where the
+/// reflection is sharp instead of spending them all out at the horizon.
+///
+/// The roughness window is much narrower than the default, and that is the
+/// whole of the tuning. Bevy fades SSR out between 0.55 and 0.6, which sounds
+/// harmless until you notice what is in that band: car paint sits at 0.37 to
+/// 0.47, so every car in the city was being ray-marched. A reflection that
+/// rough is a scatter of samples rather than an image, and it showed as
+/// salt-and-pepper speckle over every bonnet and roof.
+///
+/// So the ceiling comes down below paint. What is left inside the window is
+/// what genuinely mirrors: standing water at 0.08, wet pavement at 0.15, glass.
+/// A car's lacquer really is a mirror, but its *clearcoat* is — the base layer
+/// SSR reads is not, and the environment map already reflects the sky into it.
+/// The floor comes down too, so a puddle is fully reflective rather than
+/// halfway through fading in.
+fn reflections() -> ScreenSpaceReflections {
+    ScreenSpaceReflections {
+        min_perceptual_roughness: 0.0..0.05,
+        max_perceptual_roughness: 0.18..0.32,
+        linear_steps: 24,
+        linear_march_exponent: 2.0,
+        bisection_steps: 6,
+        use_secant: true,
+        thickness: 0.35,
+        ..default()
     }
 }
 

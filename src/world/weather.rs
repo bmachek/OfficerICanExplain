@@ -7,12 +7,17 @@
 //! being a surface and starts being a mirror for the sky and every lit window
 //! above it.
 //!
-//! That mirror comes free. The camera already carries an environment map
-//! generated from the atmosphere, so dropping the road's roughness is enough —
-//! no reflection pass, no second render of the world. Screen-space reflections
-//! would be sharper, but Bevy only runs them in a deferred pipeline, and this
-//! renderer is forward: the facade material's own fragment shader and the cars'
-//! clearcoat both live there.
+//! Part of that mirror comes free: the camera carries an environment map
+//! generated from the atmosphere, so dropping a surface's roughness is enough
+//! to reflect the sky. The rest is screen-space reflections, which need a
+//! g-buffer and so were impossible while this renderer was forward. It is not
+//! any more — see `render` — and the road now reflects the lit windows above it
+//! rather than only the sky.
+//!
+//! What lives here is the *uniform* half: a pavement really does just go
+//! evenly damp, so its material is recomputed from its dry values each time the
+//! dial moves. The road does not — rain puddles — and its wetness moved into
+//! `world::road`, where a shader varies it across the surface.
 //!
 //! Weather does not yet change on its own. The wetness is a dial, exposed to
 //! the dev panel and to `--wet` for screenshots; a system that decides when it
@@ -160,7 +165,7 @@ fn wet_the_ground(
 
     // Rain only falls once the ground is properly wet; a glossy road under a
     // clear sky is a road that has just stopped raining on.
-    let falling = if wetness > 0.35 {
+    let falling = if wetness > super::road::RAINING_ABOVE {
         Visibility::Visible
     } else {
         Visibility::Hidden
@@ -175,7 +180,7 @@ fn fall(
     config: Res<GameConfig>,
     mut drops: Query<&mut Transform, With<Raindrop>>,
 ) {
-    if config.world.wetness <= 0.35 {
+    if config.world.wetness <= super::road::RAINING_ABOVE {
         return;
     }
     let step = FALL_SPEED * time.delta_secs();

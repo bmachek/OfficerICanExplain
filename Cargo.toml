@@ -25,6 +25,9 @@ bevy = { version = "0.19", features = [
     # Percentage-closer soft shadows: a penumbra that widens with distance from
     # whatever cast it, instead of every shadow edge being equally hard.
     "experimental_pbr_pcss",
+    # Blue noise for the screen-space reflection rays. Ships a texture; without
+    # it the sampling pattern is white noise and rough reflections speckle.
+    "bluenoise_texture",
 ] }
 avian3d = "0.7"
 bevy-tnua = "0.32"

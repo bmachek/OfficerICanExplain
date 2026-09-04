@@ -11,13 +11,35 @@
 // Nothing about it depends on how big the building is, which means one material
 // per district and palette still covers the city — the alternative was a
 // material per size bucket as well, and several hundred draw calls with it.
+//
+// One file, two pipelines. Under `PREPASS_PIPELINE` this runs as the deferred
+// fragment and writes a g-buffer; otherwise it shades forward as before. The
+// grain itself is computed once, in `dress`, and neither branch has its own
+// copy — which matters more than it sounds, because the mean-normalisation and
+// the relief basis below are subtle enough that two copies would drift.
 
 #import bevy_pbr::{
-    forward_io::{VertexOutput, FragmentOutput},
+    pbr_types::PbrInput,
+    pbr_functions::alpha_discard,
     pbr_fragment::pbr_input_from_standard_material,
-    pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
+}
+
+#ifdef PREPASS_PIPELINE
+#import bevy_pbr::{
+    prepass_io::{VertexOutput, FragmentOutput},
+    pbr_deferred_functions::deferred_output,
+}
+#else
+#import bevy_pbr::{
+    forward_io::{VertexOutput, FragmentOutput},
+    pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
     pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
 }
+#endif
+
+#ifdef VISIBILITY_RANGE_DITHER
+#import bevy_pbr::pbr_functions::visibility_range_dither;
+#endif
 
 struct FacadeSettings {
     // Metres of wall covered by one repeat of the grain.
@@ -36,11 +58,13 @@ struct FacadeSettings {
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var grain_normal: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(104) var grain_normal_sampler: sampler;
 
-@fragment
-fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
-    var pbr_input = pbr_input_from_standard_material(in, is_front);
-    pbr_input.material.base_color =
-        alpha_discard(pbr_input.material, pbr_input.material.base_color);
+// Lays the scanned grain over a facade's own painted surface.
+//
+// Takes and returns the whole `PbrInput` rather than writing through a pointer,
+// so the forward and deferred branches below are each one line and there is no
+// second copy of any of this to fall out of step.
+fn dress(input: PbrInput) -> PbrInput {
+    var pbr_input = input;
 
     // Every wall in this city stands on the street grid, so the dominant axis
     // of the normal *is* the plane the wall lies in. That makes the usual
@@ -96,6 +120,32 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let tilt = (tangent * packed.x + bitangent * packed.y) * settings.relief * wall;
     pbr_input.N = normalize(pbr_input.N + tilt);
 
+    return pbr_input;
+}
+
+@fragment
+fn fragment(vertex_output: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+    var in = vertex_output;
+
+    // Halfway through a level-of-detail crossfade, drop this fragment or the
+    // one from the other level, by a screen-space pattern. Without it a
+    // building swaps detail in one frame and the whole street blinks.
+#ifdef VISIBILITY_RANGE_DITHER
+    visibility_range_dither(in.position, in.visibility_range_dither);
+#endif
+
+    var pbr_input = pbr_input_from_standard_material(in, is_front);
+    pbr_input.material.base_color =
+        alpha_discard(pbr_input.material, pbr_input.material.base_color);
+
+    pbr_input = dress(pbr_input);
+
+#ifdef PREPASS_PIPELINE
+    // Write the grain into the g-buffer and let the deferred lighting pass
+    // shade it. The relief survives, because the gbuffer stores `N` rather than
+    // the geometric normal; so does the modulated colour.
+    let out = deferred_output(in, pbr_input);
+#else
     var out: FragmentOutput;
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         out.color = apply_pbr_lighting(pbr_input);
@@ -103,5 +153,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         out.color = pbr_input.material.base_color;
     }
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+#endif
+
     return out;
 }

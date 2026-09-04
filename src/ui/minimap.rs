@@ -73,6 +73,17 @@ fn spawn_minimap_camera(mut commands: Commands, mut images: ResMut<Assets<Image>
             order: -1,
             ..default()
         },
+        // The world is drawn deferred (see `render`), and a deferred material
+        // is skipped outright by the forward opaque pass rather than falling
+        // back to it. Without a g-buffer of its own this camera would render a
+        // black square, so it gets one — at 320 by 320 that is nothing, and the
+        // alternative is keeping a second renderer path alive for one widget.
+        //
+        // Everything else the main camera carries is still deliberately absent:
+        // this is a flat top-down diagram, and bloom or ambient occlusion would
+        // cost real time to make it worse.
+        bevy::core_pipeline::prepass::DepthPrepass,
+        bevy::core_pipeline::prepass::DeferredPrepass,
         RenderTarget::Image(ImageRenderTarget {
             handle: handle.clone(),
             scale_factor: 1.0,

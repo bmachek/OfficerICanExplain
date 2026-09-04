@@ -10,6 +10,11 @@
 //! instead of the building, so a two-storey house and a forty-storey tower can
 //! share one material. Without that the material count picks up a size bucket
 //! dimension, and the city's twenty-odd draw calls become several hundred.
+//!
+//! The extension shades in both pipelines. Screen-space reflections read a
+//! g-buffer and so require the deferred path, and a material that only
+//! implemented the forward one would quietly write walls into that g-buffer
+//! without their grain.
 
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -65,6 +70,20 @@ pub struct FacadeGrain {
 
 impl MaterialExtension for FacadeGrain {
     fn fragment_shader() -> ShaderRef {
+        SHADER.into()
+    }
+
+    /// The same file. It branches on `PREPASS_PIPELINE` and writes a g-buffer
+    /// instead of a lit colour — the shape Bevy's own `pbr.wgsl` uses, and the
+    /// reason the grain is computed in one place rather than in two shaders
+    /// that would have to be kept in step by hand.
+    ///
+    /// Without this the extension would fall through to `StandardMaterial`'s
+    /// deferred shader, and every wall in the city would go into the g-buffer
+    /// with its painted texture and none of its scanned grain — which is not a
+    /// crash, and is exactly the kind of silent loss that is hard to spot in a
+    /// screenshot.
+    fn deferred_fragment_shader() -> ShaderRef {
         SHADER.into()
     }
 }

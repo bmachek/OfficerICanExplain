@@ -6,6 +6,7 @@ pub mod facade;
 pub mod markings;
 pub mod material;
 pub mod props;
+pub mod road;
 pub mod roadgraph;
 pub mod rooftop;
 pub mod streaming;
@@ -32,6 +33,7 @@ impl Plugin for WorldPlugin {
             PhysicsPlugins::default(),
             material::MaterialLibraryPlugin,
             facade::FacadePlugin,
+            road::RoadPlugin,
             weather::WeatherPlugin,
             timeofday::TimeOfDayPlugin,
             streetlights::StreetLightPlugin,
@@ -92,7 +94,7 @@ fn generate_city(
 /// its true size makes the repeat obvious on a long straight, so it is stretched
 /// somewhat — the trade is between visible repetition and visible blur, and at
 /// the angle a road is actually seen from, blur loses.
-const ASPHALT_TILE: f32 = 6.0;
+pub(crate) const ASPHALT_TILE: f32 = 6.0;
 
 /// How wide the road surface is drawn, in metres. Far beyond the streamed city
 /// on purpose — see `setup_ground`.
@@ -109,9 +111,8 @@ fn setup_ground(
     mut commands: Commands,
     config: Res<GameConfig>,
     library: Res<material::MaterialLibrary>,
-    mut wet: ResMut<weather::WetSurfaces>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut roads: ResMut<Assets<road::RoadMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     // The visible plane runs far past the city, so that from a rooftop the
@@ -125,13 +126,13 @@ fn setup_ground(
         Mesh3d(meshes.add(buildings::with_tangents(
             Plane3d::default().mesh().size(size, size).build(),
         ))),
-        MeshMaterial3d({
-            let asphalt = road_material(&library, images.as_mut(), size);
-            let (dry_color, dry_roughness) = (asphalt.base_color, asphalt.perceptual_roughness);
-            let handle = materials.add(asphalt);
-            wet.add(handle.clone(), dry_color, dry_roughness);
-            handle
-        }),
+        // Not registered with `WetSurfaces` any more. The road's wetness is a
+        // uniform its own shader reads, so it varies across the surface instead
+        // of being one value recomputed onto the material — see `world::road`.
+        MeshMaterial3d(roads.add(road::RoadMaterial {
+            base: road_material(&library, images.as_mut(), size),
+            extension: road::RoadSheen::default(),
+        })),
     ));
     commands.spawn((
         Name::new("Ground collider"),
