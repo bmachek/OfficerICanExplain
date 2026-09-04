@@ -213,6 +213,15 @@ mid-engined wedge, a pickup, a box van and a cruiser. Copying a real car's lines
 would mean copying design its manufacturer protects, and an archetype reads
 faster anyway — it is the idea of the car rather than one example of it.
 
+Each archetype carries a beltline: above a stated height the shell steps in by
+four percent, and that step is the crease line down the flank that every pressed
+panel has. It has to be put there rather than found — sampled at twenty-eight
+points, the sharpest corner on a saloon's cross-section is twenty-three degrees,
+spread over several of them, so there is no edge in the shape to detect. The two
+ring points straddling the belt are pinned to it, which turns the step into a
+right angle no amount of tessellation can soften, and `split_creases` then
+duplicates the vertices along it so smoothing stops averaging across the fold.
+
 Wheels are surfaces of revolution with the tread and the spokes painted on and
 normal-mapped rather than modelled — geometry that fine is a blur above walking
 pace.
@@ -254,8 +263,6 @@ pursuit, and everything but the player's own car is positioned in the world.
 - Vehicle damage is not visually modelled — cars are wrecked, not deformed.
 - Facades are procedural, so walls read as materials rather than photographs.
   Scanning them needs a custom material with a detail UV; see above.
-- Bodywork has no crease lines. The cross-sections give a shoulder that turns
-  quickly, which reads as one, but nothing in the mesh is a hard edge.
 - Six wall sets across five districts, so a long enough walk repeats. What
   breaks the repeat is combination, not count — see above.
 - Damage does not change how a car collides: dents move metal, never the box

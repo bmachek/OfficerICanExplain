@@ -25,6 +25,13 @@ use bevy::prelude::*;
 
 use super::spec::{VehicleClass, VehicleSpec};
 
+/// How much narrower the body is above its beltline.
+///
+/// Small on purpose. This is a crease, not a step: what the eye reads is the
+/// hard change of shading across it, and five percent is already plenty for
+/// that. Ten looks like the roof has slipped.
+const TUMBLEHOME: f32 = 0.955;
+
 /// Points around one cross-section.
 ///
 /// Twenty-eight rather than twenty because the shoulder — the turn from flank
@@ -73,6 +80,15 @@ impl Section {
 /// underneath it at four-fifths of the width. The wheel then sits outboard of
 /// the sill and under the shell's arch, which is exactly where a wheel goes.
 pub struct BodyProfile {
+    /// Height of the beltline crease, in the same units as `top` and `bottom`.
+    ///
+    /// The shoulder of a superellipse turns evenly — sampled at twenty-eight
+    /// points the sharpest corner on a saloon's cross-section is twenty-three
+    /// degrees, spread over several of them. There is no edge in there to find,
+    /// which means a crease has to be *put* there: above this height the shell
+    /// steps in by a few percent, and the step is the line down the car's
+    /// flank that every pressed panel has.
+    pub belt: f32,
     /// The upper body: full width, arching over each axle.
     pub shell: Vec<Section>,
     /// The sill and valances: narrower, running the length below the shell,
@@ -90,7 +106,7 @@ pub struct BodyProfile {
 /// looks. The ends are capped with their own duplicated vertices, so smoothing
 /// averages the nose into a dome rather than dragging the bonnet's normals
 /// round the front.
-fn loft(sections: &[Section], scale: Vec3) -> Mesh {
+fn loft(sections: &[Section], scale: Vec3, belt: Option<f32>) -> Mesh {
     assert!(sections.len() >= 2, "a body needs at least two sections");
 
     let mut positions: Vec<[f32; 3]> = Vec::new();
@@ -105,17 +121,46 @@ fn loft(sections: &[Section], scale: Vec3) -> Mesh {
         // The exponent that turns a circle into a rounded box.
         let power = 2.0 / section.squareness.max(2.0);
 
-        (0..RING)
+        let mut points: Vec<Vec3> = (0..RING)
             .map(|i| {
                 let theta = std::f32::consts::TAU * (i as f32 / RING as f32) - FRAC_PI_2;
                 let (sin, cos) = theta.sin_cos();
+                let y = center + half_height * sin.signum() * sin.abs().powf(power);
+                let taper = match belt {
+                    Some(height) if y > height * scale.y => TUMBLEHOME,
+                    _ => 1.0,
+                };
                 Vec3::new(
-                    half_width * cos.signum() * cos.abs().powf(power),
-                    center + half_height * sin.signum() * sin.abs().powf(power),
+                    half_width * taper * cos.signum() * cos.abs().powf(power),
+                    y,
                     z,
                 )
             })
-            .collect()
+            .collect();
+
+        // Snap the two points that straddle the belt onto it. Left to fall
+        // where the sampling happens to put them, the step spreads over the
+        // ring's own vertical spacing and comes out at about thirty-five
+        // degrees — under any threshold loose enough to leave the roof round.
+        // Pinned to the same height, the ledge between them is horizontal, the
+        // flank either side is vertical, and the fold is a right angle that no
+        // amount of tessellation can soften.
+        if let Some(height) = belt {
+            let belt_y = height * scale.y;
+            for i in 0..RING {
+                let j = (i + 1) % RING;
+                let (a, b) = (points[i], points[j]);
+                let crosses = (a.y - belt_y) * (b.y - belt_y) < 0.0;
+                // Only on the flanks. Over the roof and under the floor the
+                // ring is nearly horizontal, and a crease there is a dent.
+                let on_the_flank = a.x.abs().min(b.x.abs()) > half_width * 0.45;
+                if crosses && on_the_flank {
+                    points[i].y = belt_y;
+                    points[j].y = belt_y;
+                }
+            }
+        }
+        points
     };
 
     // --- the skin ---
@@ -273,6 +318,9 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
         // Three-box saloon: short bonnet, upright screen, a boot behind the
         // cabin. The default shape of a car.
         VehicleClass::Sedan | VehicleClass::Police => BodyProfile {
+            // Just above the widest part of the section, where a saloon's
+            // shoulder line runs.
+            belt: 0.10,
             shell: vec![
                 Section::new(0.00, 0.70, -0.46, 0.04, 3.5),
                 Section::new(0.04, 0.88, -0.58, 0.18, 4.0),
@@ -319,6 +367,8 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
         // tail. The proportion is the whole point: two thirds of the length is
         // in front of the driver.
         VehicleClass::Coupe => BodyProfile {
+            // Lower and harder than a saloon's; it is most of the car's face.
+            belt: 0.06,
             shell: vec![
                 Section::new(0.00, 0.70, -0.42, 0.02, 4.0),
                 Section::new(0.04, 0.90, -0.54, 0.16, 4.5),
@@ -367,6 +417,8 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
         // the silhouette, so the shell drops hard at two thirds of the length
         // and the bed walls are what is left.
         VehicleClass::Pickup => BodyProfile {
+            // Level with the top of the bed sides.
+            belt: 0.24,
             shell: vec![
                 Section::new(0.00, 0.78, -0.30, 0.14, 5.0),
                 Section::new(0.04, 0.94, -0.42, 0.30, 5.5),
@@ -414,6 +466,7 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
         // Mid-engined wedge: nose almost on the floor, screen raked hard, the
         // cabin pushed forward with the mass behind it.
         VehicleClass::Sports => BodyProfile {
+            belt: -0.02,
             shell: vec![
                 Section::new(0.00, 0.64, -0.56, -0.22, 3.0),
                 Section::new(0.05, 0.86, -0.66, -0.02, 3.2),
@@ -459,6 +512,9 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
         // Box van: one volume, flat sides, a short snub nose. Nearly all the
         // length is cargo, which is what makes it read as a van and not a bus.
         VehicleClass::Truck => BodyProfile {
+            // A van's is a rubbing strip rather than a styling line, but it is
+            // the same fold in the panel.
+            belt: 0.30,
             shell: vec![
                 Section::new(0.00, 0.78, -0.36, 0.26, 5.0),
                 Section::new(0.04, 0.94, -0.50, 0.58, 5.5),
@@ -506,6 +562,118 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
 /// puts the wheels back outside them, which is what reads as a car having
 /// wheels at all.
 const BODY_INSET: f32 = 0.93;
+
+/// Two faces meeting at more than this are a crease, not a curve.
+///
+/// Well above the twenty-three degrees the cross-section's own shoulder turns
+/// through, so nothing that is meant to be round gets hardened by accident;
+/// well below the sixty-odd the beltline step produces.
+const CREASE_ANGLE: f32 = 38.0;
+
+/// Hardens the edges where a mesh genuinely folds, and leaves the rest smooth.
+///
+/// Smooth normals average every face meeting at a vertex, which is right for a
+/// roof and wrong for a shoulder line — averaged across a crease, the crease
+/// stops existing. The fix is to give the vertex a second copy: faces on one
+/// side of the fold use the original, faces on the other use the duplicate, and
+/// each then averages only within its own side.
+///
+/// Which faces belong together is decided by walking edges rather than by
+/// clustering normals. Two triangles sharing an edge are on the same side if
+/// the edge is not sharp, and that relation is transitive — so a cylinder stays
+/// one smooth surface all the way round however many faces it takes, while a
+/// single sharp edge splits it. Clustering by normal instead makes the answer
+/// depend on which face happened to be visited first.
+fn split_creases(mut mesh: Mesh, degrees: f32) -> Mesh {
+    let Some(Indices::U32(indices)) = mesh.indices() else {
+        return mesh;
+    };
+    let indices = indices.clone();
+    let Some(positions) = mesh
+        .attribute(Mesh::ATTRIBUTE_POSITION)
+        .and_then(|a| a.as_float3())
+        .map(<[[f32; 3]]>::to_vec)
+    else {
+        return mesh;
+    };
+    let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+        Some(VertexAttributeValues::Float32x2(uv)) => uv.clone(),
+        _ => return mesh,
+    };
+
+    let triangles = indices.len() / 3;
+    let normal_of = |t: usize| -> Vec3 {
+        let [a, b, c] = [0, 1, 2].map(|k| Vec3::from(positions[indices[t * 3 + k] as usize]));
+        (b - a).cross(c - a).normalize_or_zero()
+    };
+    let normals: Vec<Vec3> = (0..triangles).map(normal_of).collect();
+
+    // --- which triangles share a smooth edge ---
+    let mut group: Vec<usize> = (0..triangles).collect();
+    fn root(group: &mut [usize], mut i: usize) -> usize {
+        while group[i] != i {
+            group[i] = group[group[i]];
+            i = group[i];
+        }
+        i
+    }
+
+    let mut edges: bevy::platform::collections::HashMap<(u32, u32), usize> = default();
+    let cosine = degrees.to_radians().cos();
+    for t in 0..triangles {
+        for k in 0..3 {
+            let (a, b) = (indices[t * 3 + k], indices[t * 3 + (k + 1) % 3]);
+            let key = (a.min(b), a.max(b));
+            match edges.insert(key, t) {
+                Some(other) if normals[t].dot(normals[other]) >= cosine => {
+                    let (x, y) = (root(&mut group, t), root(&mut group, other));
+                    group[x] = y;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // --- one vertex copy per smoothing group that touches it ---
+    let mut positions = positions;
+    let mut uvs = uvs;
+    let mut indices = indices;
+    let mut assigned: bevy::platform::collections::HashMap<(u32, usize), u32> = default();
+    // Which side got to keep each original vertex. The first one to ask uses it
+    // in place; everyone after that gets a copy.
+    let mut claimed: Vec<Option<usize>> = vec![None; positions.len()];
+    for t in 0..triangles {
+        let side = root(&mut group, t);
+        for k in 0..3 {
+            let vertex = indices[t * 3 + k];
+            let slot = match assigned.get(&(vertex, side)) {
+                Some(&slot) => slot,
+                None => {
+                    let slot = match claimed[vertex as usize] {
+                        None => {
+                            claimed[vertex as usize] = Some(side);
+                            vertex
+                        }
+                        Some(_) => {
+                            positions.push(positions[vertex as usize]);
+                            uvs.push(uvs[vertex as usize]);
+                            (positions.len() - 1) as u32
+                        }
+                    };
+                    assigned.insert((vertex, side), slot);
+                    slot
+                }
+            };
+            indices[t * 3 + k] = slot;
+        }
+    }
+
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
+    mesh.compute_smooth_normals();
+    mesh
+}
 
 /// Pushes a dent into a body panel.
 ///
@@ -557,10 +725,15 @@ pub struct BodyMeshes {
 pub fn build(class: VehicleClass, spec: &VehicleSpec) -> BodyMeshes {
     let profile = profile(class);
     let scale = spec.half_extents * Vec3::new(BODY_INSET, 1.0, 1.0);
+    // Only the shell is creased. A sill is a pressing with no shoulder to
+    // crease, and a greenhouse is glass.
     BodyMeshes {
-        shell: loft(&profile.shell, scale),
-        lower: loft(&profile.lower, scale),
-        cabin: (!profile.cabin.is_empty()).then(|| loft(&profile.cabin, scale)),
+        shell: split_creases(
+            loft(&profile.shell, scale, Some(profile.belt)),
+            CREASE_ANGLE,
+        ),
+        lower: loft(&profile.lower, scale, None),
+        cabin: (!profile.cabin.is_empty()).then(|| loft(&profile.cabin, scale, None)),
     }
 }
 
@@ -597,6 +770,7 @@ mod tests {
                 shell,
                 lower,
                 cabin,
+                ..
             } = profile(class);
             for section in shell.iter().chain(lower.iter()) {
                 assert!(
@@ -620,6 +794,7 @@ mod tests {
                 shell,
                 lower,
                 cabin,
+                ..
             } = profile(class);
             for run in [shell, lower, cabin] {
                 for pair in run.windows(2) {
@@ -649,6 +824,70 @@ mod tests {
             let beltline = shell.iter().map(|s| s.top).fold(f32::MIN, f32::max);
             let roof = cabin.iter().map(|s| s.top).fold(f32::MIN, f32::max);
             assert!(roof > beltline, "{class:?} has no visible greenhouse");
+        }
+    }
+
+    #[test]
+    fn a_beltline_creases_and_a_body_without_one_does_not() {
+        let class = VehicleClass::Sedan;
+        let spec = class.spec();
+        let profile = profile(class);
+        let scale = spec.half_extents * Vec3::new(BODY_INSET, 1.0, 1.0);
+
+        let smooth = split_creases(loft(&profile.shell, scale, None), CREASE_ANGLE);
+        let creased = split_creases(
+            loft(&profile.shell, scale, Some(profile.belt)),
+            CREASE_ANGLE,
+        );
+
+        // Both split at the nose and tail caps, which meet the flanks at a
+        // right angle. The belt has to add more on top of that.
+        assert!(
+            vertex_count(&creased) > vertex_count(&smooth),
+            "the beltline added no hard edge: {} vertices either way",
+            vertex_count(&smooth)
+        );
+    }
+
+    #[test]
+    fn splitting_duplicates_vertices_without_moving_any() {
+        let class = VehicleClass::Coupe;
+        let spec = class.spec();
+        let profile = profile(class);
+        let scale = spec.half_extents * Vec3::new(BODY_INSET, 1.0, 1.0);
+
+        let plain = loft(&profile.shell, scale, Some(profile.belt));
+        let split = split_creases(
+            loft(&profile.shell, scale, Some(profile.belt)),
+            CREASE_ANGLE,
+        );
+
+        let triangles = |mesh: &Mesh| match mesh.indices() {
+            Some(Indices::U32(i)) => i.len() / 3,
+            _ => 0,
+        };
+        assert_eq!(
+            triangles(&plain),
+            triangles(&split),
+            "splitting must not add or remove any surface"
+        );
+
+        // Every position in the split mesh has to exist in the original: a
+        // crease is a second copy of a vertex, never a moved one.
+        let read = |mesh: &Mesh| {
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+                .and_then(|a| a.as_float3())
+                .expect("positions")
+                .to_vec()
+        };
+        let before = read(&plain);
+        for point in read(&split) {
+            assert!(
+                before
+                    .iter()
+                    .any(|p| Vec3::from(*p).distance(Vec3::from(point)) < 1e-5),
+                "splitting invented a vertex at {point:?}"
+            );
         }
     }
 
