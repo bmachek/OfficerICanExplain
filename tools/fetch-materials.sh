@@ -6,7 +6,7 @@
 # use. That licence is the reason these specific sets were chosen: the game
 # ships them without owing anybody anything.
 #
-# The download is ~143 MB and lands in assets/materials/, which is gitignored.
+# The download is ~215 MB and lands in assets/materials/, which is gitignored.
 # The game runs without it: `world::texture` generates a procedural stand-in for
 # every material it cannot find on disk, so a fresh clone still starts.
 #
@@ -23,8 +23,12 @@ RESOLUTION="2K-JPG"
 MATERIALS=(
     Asphalt031        # road surface
     PavingStones138   # pavement slabs
-    Concrete034       # downtown and midtown facades
-    Bricks097         # residential facades
+    Concrete034       # facades
+    Concrete046       # facades
+    Bricks097         # facades
+    Bricks104         # facades
+    Bricks075A        # facades
+    PaintedPlaster006 # facades
     Gravel023         # flat roofs
     Grass005          # parks
 )

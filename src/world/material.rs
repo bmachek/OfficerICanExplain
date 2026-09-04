@@ -7,7 +7,7 @@
 //!
 //! Three things this module exists to get right:
 //!
-//! * **Missing is not broken.** The download is 131 MB and gitignored, so a
+//! * **Missing is not broken.** The download is 200 MB and gitignored, so a
 //!   fresh clone has none of it. Every lookup returns an `Option`, and the
 //!   caller falls back to the procedural version in [`super::texture`]. The
 //!   game looks worse and runs fine.
@@ -38,12 +38,31 @@ const VARIANT: &str = "2K-JPG";
 pub mod set {
     pub const ROAD: &str = "Asphalt031";
     pub const PAVEMENT: &str = "PavingStones138";
-    pub const CONCRETE: &str = "Concrete034";
-    pub const BRICK: &str = "Bricks097";
     pub const ROOF: &str = "Gravel023";
     pub const GRASS: &str = "Grass005";
 
-    pub const ALL: [&str; 6] = [ROAD, PAVEMENT, CONCRETE, BRICK, ROOF, GRASS];
+    // Walls. Six of them, because one set dressed four ways still leaves every
+    // brick building in the city cut from the same photograph — and a facade
+    // is the surface the player spends the most time looking at.
+    pub const CONCRETE: &str = "Concrete034";
+    pub const CONCRETE_ROUGH: &str = "Concrete046";
+    pub const BRICK: &str = "Bricks097";
+    pub const BRICK_PALE: &str = "Bricks104";
+    pub const BRICK_OLD: &str = "Bricks075A";
+    pub const PLASTER: &str = "PaintedPlaster006";
+
+    pub const ALL: [&str; 10] = [
+        ROAD,
+        PAVEMENT,
+        ROOF,
+        GRASS,
+        CONCRETE,
+        CONCRETE_ROUGH,
+        BRICK,
+        BRICK_PALE,
+        BRICK_OLD,
+        PLASTER,
+    ];
 }
 
 /// One scanned material's maps.

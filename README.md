@@ -22,7 +22,7 @@ generator; nothing here is authored by hand.
 ## Running
 
 ```sh
-tools/fetch-materials.sh  # ~131 MB of CC0 textures; optional, see below
+tools/fetch-materials.sh  # ~200 MB of CC0 textures; optional, see below
 cargo run                 # first build takes a few minutes; then ~2-10s
 cargo run --release       # smoother, slower to compile
 cargo run --features dev  # dynamic linking, fastest iteration
@@ -118,7 +118,7 @@ cargo run -- --screenshot shots/map.png    --follow --map
 
 ## Textures
 
-Surfaces come from photogrammetry: `tools/fetch-materials.sh` pulls six scanned
+Surfaces come from photogrammetry: `tools/fetch-materials.sh` pulls ten scanned
 PBR sets from [ambientCG](https://ambientcg.com), all released under CC0, into
 `assets/materials/`. `world::material` loads them — colour through sRGB, the
 rest linear — builds each one a mip chain on the CPU, because Bevy has no
@@ -150,12 +150,13 @@ a two-storey house and a forty-storey tower share one material. Anchoring it to
 the building instead would need a size bucket per material and take the city
 from twenty-odd draw calls to several hundred.
 
-One set has to furnish a whole district, so the variety comes from how it is
-used: each of a district's four palette slots dresses the grain at a different
-scale, and turns half of them a quarter turn. Scale is the strongest lever,
-because what the eye measures is the course height against the storey. Both are
-numbers in a uniform that already exists, so the city's material count does not
-move.
+Variety comes from combination rather than from count. Each district names four
+walls — a residential street is brick, brick, older brick and render; an
+industrial one is concrete with brick warehouses in it — and each is then
+dressed at a different scale, with half turned a quarter turn. Scale is the
+strongest lever, because what the eye measures is the course height against the
+storey. All of it lands in a material that had to exist anyway, so the city's
+material count does not move.
 
 The shader picks one projection rather than blending three. Every wall in this
 city stands on the street grid, so the dominant axis of the normal *is* the
@@ -217,9 +218,8 @@ pursuit, and everything but the player's own car is positioned in the world.
   Scanning them needs a custom material with a detail UV; see above.
 - Bodywork has no crease lines. The cross-sections give a shoulder that turns
   quickly, which reads as one, but nothing in the mesh is a hard edge.
-- One scanned set per surface. A district's four palette slots dress it at
-  different scales and orientations, which is most of the way there, but every
-  brick wall in the city is still the same photograph underneath.
+- Six wall sets across five districts, so a long enough walk repeats. What
+  breaks the repeat is combination, not count — see above.
 - Damage does not change how a car collides: dents move metal, never the box
   the physics uses. Rebuilding a convex hull per impact is the alternative.
 

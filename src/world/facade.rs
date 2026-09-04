@@ -80,24 +80,59 @@ impl Plugin for FacadePlugin {
     }
 }
 
-/// Which scanned set a district's walls are made of.
-pub fn grain_for(district: super::citygen::District) -> &'static str {
+/// Which scanned set each of a district's four palette slots is built from.
+///
+/// A district is not made of one material — a residential street is brick and
+/// render and the odd painted terrace, and an industrial one is concrete with
+/// brick warehouses in it. Four slots is what the palette already gives, so
+/// four walls per district costs nothing: the materials exist either way.
+pub fn walls_for(district: super::citygen::District) -> [&'static str; 4] {
     use super::citygen::District::*;
     match district {
-        Residential | Midtown => set::BRICK,
-        Downtown | Industrial | Park => set::CONCRETE,
+        Residential => [set::BRICK, set::BRICK_PALE, set::BRICK_OLD, set::PLASTER],
+        Midtown => [
+            set::BRICK_PALE,
+            set::PLASTER,
+            set::CONCRETE_ROUGH,
+            set::BRICK,
+        ],
+        Downtown => [
+            set::CONCRETE,
+            set::CONCRETE_ROUGH,
+            set::PLASTER,
+            set::CONCRETE,
+        ],
+        Industrial => [
+            set::CONCRETE_ROUGH,
+            set::BRICK_OLD,
+            set::CONCRETE,
+            set::BRICK_PALE,
+        ],
+        // Parks have almost nothing standing on them; whatever does is a
+        // pavilion or a substation.
+        Park => [
+            set::CONCRETE,
+            set::CONCRETE_ROUGH,
+            set::BRICK_OLD,
+            set::CONCRETE,
+        ],
     }
+}
+
+/// The wall one palette slot of a district is built from.
+pub fn grain_for(district: super::citygen::District, slot: usize) -> &'static str {
+    let walls = walls_for(district);
+    walls[slot % walls.len()]
 }
 
 /// How the grain is dressed for each of a district's palette slots.
 ///
-/// One scanned set has to furnish a whole district, so the variety has to come
-/// from how it is *used*. Scale is the strongest lever — the same brick at
-/// 1.7m and at 3.0m reads as two different bricks, because what the eye
-/// measures is the course height against the storey — and a quarter turn on
-/// half of them breaks the last of the resemblance. Both are free: they are
-/// numbers in a uniform that already exists, so the city's material count does
-/// not move.
+/// The scans differ per slot too, but dressing them differently on top is what
+/// stops the same brick reappearing across districts. Scale is the strongest
+/// lever — the same brick at 1.7m and at 3.0m reads as two different bricks,
+/// because what the eye measures is the course height against the storey — and
+/// a quarter turn breaks the last of the resemblance. Both are free: numbers in
+/// a uniform that already exists, so the city's material count does not move.
 const DRESS: [(f32, f32, bool); 4] = [
     (1.75, 0.72, false),
     (2.40, 0.62, true),
@@ -114,7 +149,7 @@ impl FacadeGrain {
         district: super::citygen::District,
         palette: usize,
     ) -> Self {
-        let scanned = library.get(grain_for(district));
+        let scanned = library.get(grain_for(district, palette));
         let (tile, strength, swap) = DRESS[palette % DRESS.len()];
         Self {
             settings: FacadeSettings {
@@ -143,12 +178,53 @@ mod tests {
     use super::super::citygen::District;
     use super::*;
 
+    const DISTRICTS: [District; 5] = [
+        District::Downtown,
+        District::Midtown,
+        District::Residential,
+        District::Industrial,
+        District::Park,
+    ];
+
     #[test]
     fn brick_goes_where_people_live_and_concrete_where_they_work() {
-        assert_eq!(grain_for(District::Residential), set::BRICK);
-        assert_eq!(grain_for(District::Midtown), set::BRICK);
-        assert_eq!(grain_for(District::Downtown), set::CONCRETE);
-        assert_eq!(grain_for(District::Industrial), set::CONCRETE);
+        let homes = walls_for(District::Residential);
+        assert!(
+            homes.iter().filter(|w| w.starts_with("Bricks")).count() >= 3,
+            "a residential street should be mostly brick, got {homes:?}"
+        );
+        let towers = walls_for(District::Downtown);
+        assert!(
+            towers.iter().filter(|w| w.starts_with("Concrete")).count() >= 3,
+            "downtown should be mostly concrete, got {towers:?}"
+        );
+    }
+
+    #[test]
+    fn no_district_is_built_from_a_single_wall() {
+        // The whole reason for the extra sets: one material repeated four ways
+        // is exactly what this replaced.
+        for district in DISTRICTS {
+            let walls = walls_for(district);
+            let distinct: std::collections::HashSet<_> = walls.iter().collect();
+            assert!(
+                distinct.len() >= 2,
+                "{district:?} is built from one wall: {walls:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_slot_lookup_stays_inside_its_district() {
+        for district in DISTRICTS {
+            let walls = walls_for(district);
+            for slot in 0..8 {
+                assert!(
+                    walls.contains(&grain_for(district, slot)),
+                    "slot {slot} of {district:?} escaped its own district"
+                );
+            }
+        }
     }
 
     #[test]
@@ -178,18 +254,14 @@ mod tests {
     }
 
     #[test]
-    fn every_district_names_a_set_the_fetch_script_knows() {
-        for district in [
-            District::Downtown,
-            District::Midtown,
-            District::Residential,
-            District::Industrial,
-            District::Park,
-        ] {
-            assert!(
-                set::ALL.contains(&grain_for(district)),
-                "{district:?} asks for a set nothing downloads"
-            );
+    fn every_district_names_sets_the_fetch_script_knows() {
+        for district in DISTRICTS {
+            for wall in walls_for(district) {
+                assert!(
+                    set::ALL.contains(&wall),
+                    "{district:?} asks for {wall}, which nothing downloads"
+                );
+            }
         }
     }
 
