@@ -23,13 +23,25 @@ pub mod stream {
     /// argument applies: a sound should not change between runs.
     pub const AUDIO: u64 = 7;
     pub const RAIN: u64 = 8;
+    /// Cloud cover and wind. Sampled rather than drawn — see `key_for`.
+    pub const WEATHER: u64 = 9;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// An independent, reproducible stream for one subsystem.
 pub fn stream_for(seed: u64, key: u64) -> ChaCha8Rng {
-    ChaCha8Rng::seed_from_u64(seed ^ key.wrapping_mul(GOLDEN))
+    ChaCha8Rng::seed_from_u64(key_for(seed, key))
+}
+
+/// The same derivation, stopping one step short of an RNG.
+///
+/// Some subsystems do not *draw* randomness, they *sample* it: value noise over
+/// a clock needs a fixed key it can hash a position against, and building a
+/// ChaCha state per sample would be absurd. They still want the stream keys to
+/// stay independent, so the mixing is shared rather than reinvented.
+pub fn key_for(seed: u64, key: u64) -> u64 {
+    seed ^ key.wrapping_mul(GOLDEN)
 }
 
 /// A stream for one chunk of one subsystem, so chunks regenerate identically

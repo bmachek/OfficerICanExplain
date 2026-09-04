@@ -15,6 +15,7 @@
 //!   cargo run -- --screenshot shots/city.png --at 0,400,600 --look 0,0,0
 //!   cargo run -- --screenshot shots/city.png --frames 120
 //!   cargo run -- --screenshot shots/city.png --quality ultra --fps-log
+//!   cargo run -- --screenshot shots/city.png --hour 21.5 --cover 1 --wet 0.9
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -73,8 +74,12 @@ pub struct CaptureRequest {
     /// Lines one of every archetype up down the street and shoots the row.
     /// The only way to compare bodywork without hunting the city for a pickup.
     pub showroom: bool,
-    /// Soaks the ground, 0 to 1. Above about a third it also rains.
+    /// Soaks the ground, 0 to 1.
     pub wetness: f32,
+    /// Puts this much cloud over the city, 0 to 1. Above about seven tenths it
+    /// also rains — which is the only way to shoot rain, now that rainfall comes
+    /// out of the sky rather than out of the ground being wet.
+    pub cover: f32,
     /// Which renderer tier to shoot at. The whole point of a preset ladder is
     /// being able to put two tiers side by side in the same framing, and that
     /// needs the choice on the command line rather than in a config file.
@@ -157,6 +162,13 @@ pub fn parse_args() -> Option<CaptureRequest> {
         wetness: value_of("--wet")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0),
+        // A fair day unless asked otherwise. Deliberately *not* the seed's own
+        // weather: every framing in the battery has to mean the same thing from
+        // one run to the next, and "whatever the sky happened to be doing"
+        // would make every shot an argument about the weather.
+        cover: value_of("--cover")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.18),
         quality: crate::render::preset_from_arg(value_of("--quality").as_deref()),
         fps_log: args.iter().any(|a| a == "--fps-log"),
         follow: args.iter().any(|a| a == "--follow"),
@@ -210,12 +222,12 @@ fn apply_capture_overrides(
     if request.map {
         map_open.0 = true;
     }
-    if request.wetness > 0.0 {
-        config.world.wetness = request.wetness;
-    }
+    config.world.start_wetness = request.wetness;
+    config.world.start_cover = request.cover;
     if let Some(hour) = request.hour {
         config.world.start_hour = hour;
-        // Freeze it, so the warmup frames do not drift the sky.
+        // Freeze it, so the warmup frames do not drift the sky. Weather runs on
+        // the same clock, so this holds the cloud and the wetness with it.
         config.world.day_length_seconds = 0.0;
     }
 }

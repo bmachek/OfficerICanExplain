@@ -13,17 +13,17 @@
 //! are a pattern.
 //!
 //! This is also where wetness stops being a material mutation. `WetSurfaces`
-//! still recomputes the pavement's colour and roughness each time the dial
+//! still recomputes the pavement's colour and roughness each time the weather
 //! moves, because a pavement really does just go uniformly damp; the road's
-//! wetness is now a uniform the shader reads, so it varies per fragment and
-//! costs one buffer write per change rather than a pass over the materials.
+//! wetness is a uniform the shader reads, so it varies per fragment and costs
+//! one buffer write per change rather than a pass over the materials.
 
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
 
-use crate::core::config::GameConfig;
+use super::weather::Weather;
 
 const SHADER: &str = "shaders/road.wgsl";
 
@@ -42,13 +42,6 @@ const PUDDLE_TILE: f32 = 9.5;
 const _: () = assert!(PUDDLE_TILE > super::ASPHALT_TILE);
 const _: () = assert!(PUDDLE_TILE < 30.0);
 
-/// Above this much wetness it is actually raining, so the water is moving.
-///
-/// The same threshold `weather` uses to decide whether to draw falling rain,
-/// and it has to be: ripples on a road under a clear sky are the kind of detail
-/// that is only ever noticed when it is wrong.
-pub const RAINING_ABOVE: f32 = 0.35;
-
 #[derive(Clone, Copy, Debug, ShaderType, Reflect)]
 pub struct RoadSettings {
     pub wetness: f32,
@@ -56,7 +49,9 @@ pub struct RoadSettings {
     /// Seconds. Held at zero when it is not raining, so a merely damp road is
     /// still rather than trembling.
     pub time: f32,
-    /// How hard it is falling, which is what decides ripple strength.
+    /// How hard it is falling, which is what decides ripple strength. Not
+    /// inferred from `wetness`: a road left glossy after a shower must be still,
+    /// and that is a state the weather has and a single dial did not.
     pub fall: f32,
 }
 
@@ -103,32 +98,20 @@ impl Plugin for RoadPlugin {
     }
 }
 
-/// How hard it is falling, from how wet the ground is.
+/// Pushes the current weather into the road material.
 ///
-/// Wetness is the only weather input there is, so rainfall has to be inferred
-/// from it. Below the threshold the ground is merely damp — drying out after
-/// the fact, or splashed — and nothing is falling.
-pub fn rainfall(wetness: f32) -> f32 {
-    if wetness <= RAINING_ABOVE {
-        return 0.0;
-    }
-    ((wetness - RAINING_ABOVE) / (1.0 - RAINING_ABOVE)).clamp(0.0, 1.0)
-}
-
-/// Pushes the current wetness into the road material.
-///
-/// One uniform write when the dial moves, against `WetSurfaces`' pass over
+/// One uniform write when the weather moves, against `WetSurfaces`' pass over
 /// every registered material. The clock is only advanced while it is actually
 /// raining: a dry road holding a nonzero time would keep re-uploading the
 /// uniform every frame for a ripple nobody can see.
 fn soak_the_road(
-    config: Res<GameConfig>,
+    weather: Res<Weather>,
     time: Res<Time>,
     mut materials: ResMut<Assets<RoadMaterial>>,
     roads: Query<&MeshMaterial3d<RoadMaterial>>,
 ) {
-    let wetness = config.world.wetness.clamp(0.0, 1.0);
-    let fall = rainfall(wetness);
+    let wetness = weather.wetness.clamp(0.0, 1.0);
+    let fall = weather.rain.clamp(0.0, 1.0);
 
     for handle in &roads {
         let Some(mut material) = materials.get_mut(&handle.0) else {
@@ -139,7 +122,9 @@ fn soak_the_road(
         if fall > 0.0 {
             settings.time = time.elapsed_secs();
         }
-        if (settings.wetness - wetness).abs() > f32::EPSILON {
+        if (settings.wetness - wetness).abs() > f32::EPSILON
+            || (settings.fall - fall).abs() > f32::EPSILON
+        {
             settings.wetness = wetness;
             settings.fall = fall;
         }
@@ -150,33 +135,16 @@ fn soak_the_road(
 mod tests {
     use super::*;
 
+    /// The puddle field and the asphalt are two patterns laid over the same
+    /// surface, and the road only reads as road while they are on different
+    /// scales. Both sides are constants, so the interesting half of this is the
+    /// compile-time assertion above; this checks the value that reaches the GPU.
     #[test]
-    fn a_dry_road_has_nothing_falling_on_it() {
-        assert_eq!(rainfall(0.0), 0.0);
-        assert_eq!(rainfall(RAINING_ABOVE), 0.0);
-    }
-
-    /// Damp is not rain. A road left wet after a shower, or splashed at a kerb,
-    /// must not sprout ripples — that is the tell that the effect is driven by
-    /// a number rather than by weather.
-    #[test]
-    fn a_merely_damp_road_is_still() {
-        assert_eq!(rainfall(0.2), 0.0);
-        assert_eq!(rainfall(0.34), 0.0);
-    }
-
-    #[test]
-    fn rainfall_climbs_with_wetness_and_tops_out_at_one() {
-        assert!(rainfall(0.5) > 0.0);
-        assert!(rainfall(0.8) > rainfall(0.5));
-        assert_eq!(rainfall(1.0), 1.0);
-    }
-
-    /// The dial is clamped elsewhere, but a value out of range reaching the
-    /// shader would drive the ripple past its amplitude.
-    #[test]
-    fn a_wetness_out_of_range_does_not_escape_the_ramp() {
-        assert_eq!(rainfall(4.0), 1.0);
-        assert_eq!(rainfall(-1.0), 0.0);
+    fn a_fresh_road_is_dry_and_still() {
+        let settings = RoadSettings::default();
+        assert_eq!(settings.wetness, 0.0);
+        assert_eq!(settings.fall, 0.0);
+        assert_eq!(settings.time, 0.0);
+        assert_eq!(settings.tile, PUDDLE_TILE);
     }
 }

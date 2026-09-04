@@ -4,9 +4,19 @@
 #
 # Every framing here exists because it is the only view that shows something:
 # the aerial is the only one that shows the roofline and the shadow distance,
-# `--at-car` is the only one that shows bodywork, and the night and rain shots
-# are where the lighting model is actually under load. Adding a framing is
-# cheap; the discipline is shooting the same ones every time.
+# `--at-car` is the only one that shows bodywork, and the night, rain and
+# overcast shots are where the lighting model is actually under load. Adding a
+# framing is cheap; the discipline is shooting the same ones every time.
+#
+# The dawn framing is the one carrying hard coordinates rather than `--at-node`,
+# and they are the default seed's: it has to look *into* the low sun down an open
+# street, because that is the direction the air lights up from, and a node number
+# says nothing about which way its streets run.
+#
+# Weather is pinned in every framing, including the ones that do not mention it.
+# It runs on the game clock now, so a shot without `--hour` would drift its own
+# sky between two runs and turn every comparison into an argument about the
+# weather rather than about the change under test.
 #
 #   tools/shoot.sh                       # the default preset, into shots/
 #   tools/shoot.sh --quality ultra       # one named preset
@@ -27,7 +37,9 @@ FRAMINGS=(
     "street|--at-node 300 --eye 1.7 --hour 16"
     "dusk|--at-node 300 --eye 1.7 --hour 19.4"
     "night|--at-node 300 --eye 1.7 --hour 22.5"
-    "rain|--at-node 300 --eye 1.7 --hour 21.5 --wet 0.9"
+    "rain|--at-node 300 --eye 1.7 --hour 21.5 --wet 0.9 --cover 1"
+    "dawn|--at -163.6,1.7,-744.3 --look 836,25,-604 --hour 6.4"
+    "overcast|--at-node 300 --eye 1.7 --hour 13 --cover 1"
     "cars|--at-car --hour 11"
     "damage|--at-car --damage 0.45 --hour 11"
     "showroom|--showroom --hour 11"

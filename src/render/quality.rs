@@ -142,6 +142,10 @@ pub struct GraphicsSettings {
     pub volumetrics: Volumetrics,
     pub motion_blur: bool,
     pub depth_of_field: bool,
+    /// The artefacts of a real lens: a vignette, and a trace of chromatic
+    /// aberration at the edge of the frame. Cheap, and pure luxury — the two
+    /// lowest tiers spend the same milliseconds on something load-bearing.
+    pub lens: bool,
     /// Multiplies every LOD switching distance. Below one, detail is dropped
     /// closer to the camera; above one it is held further out.
     pub lod_scale: f32,
@@ -172,6 +176,7 @@ impl QualityPreset {
                 volumetrics: Volumetrics::Off,
                 motion_blur: false,
                 depth_of_field: false,
+                lens: false,
                 lod_scale: 0.6,
                 raytracing: false,
                 // No history buffer at all: on the hardware this tier is for,
@@ -190,6 +195,7 @@ impl QualityPreset {
                 volumetrics: Volumetrics::Fog,
                 motion_blur: false,
                 depth_of_field: false,
+                lens: false,
                 lod_scale: 0.85,
                 raytracing: false,
                 upscaling: Upscaling::Taa,
@@ -206,6 +212,7 @@ impl QualityPreset {
                 volumetrics: Volumetrics::FogAndLights,
                 motion_blur: true,
                 depth_of_field: false,
+                lens: true,
                 lod_scale: 1.0,
                 raytracing: false,
                 upscaling: Upscaling::Taa,
@@ -224,6 +231,7 @@ impl QualityPreset {
                 volumetrics: Volumetrics::FogAndLights,
                 motion_blur: true,
                 depth_of_field: true,
+                lens: true,
                 lod_scale: 1.3,
                 raytracing: true,
                 upscaling: Upscaling::Dlss,
@@ -242,6 +250,7 @@ impl QualityPreset {
                 // would only smear the thing the shot exists to show.
                 motion_blur: false,
                 depth_of_field: true,
+                lens: true,
                 // Nothing is ever allowed to drop detail: a still is judged at
                 // full size, and a switched LOD is the one artefact that cannot
                 // be argued away afterwards.
@@ -358,6 +367,7 @@ mod tests {
                 upper.contact_shadows || !lower.contact_shadows,
                 "{tier} dropped contact shadows"
             );
+            assert!(upper.lens || !lower.lens, "{tier} dropped the lens stack");
         }
     }
 

@@ -23,6 +23,9 @@
 //!   grounds a box on a pavement instead of leaving it floating, and it is
 //!   noisy on its own; TAA is what resolves that noise, and it also cleans up
 //!   the shimmer along a thousand building edges that MSAA cannot reach.
+//! * **Air the light travels through**, so a low sun comes down a side street
+//!   as a shaft and a lamp stands in a cone. See [`volumetrics`].
+//! * **A grade, a shutter and a lens** on top of all of it. See [`post`].
 //!
 //! Everything is attached to the camera by a system rather than at spawn,
 //! because the camera belongs to `player::camera` and this module should not
@@ -35,8 +38,10 @@
 //! the dev panel takes effect without a restart — which is the only way these
 //! trades can honestly be compared.
 
+pub mod post;
 pub mod quality;
 pub mod shadows;
+pub mod volumetrics;
 
 use bevy::anti_alias::taa::TemporalAntiAliasing;
 use bevy::camera::{Exposure, Hdr};
@@ -55,7 +60,8 @@ use bevy::render::renderer::RenderDevice;
 
 use crate::core::config::GameConfig;
 use crate::player::camera::CameraRig;
-use crate::world::timeofday::{TimeOfDay, daylight};
+use crate::world::timeofday::{TimeOfDay, brightness};
+use crate::world::weather::Weather;
 
 use quality::{AoQuality, Capabilities, GraphicsSettings, QualityPreset, Upscaling};
 
@@ -99,7 +105,8 @@ impl Plugin for RenderPlugin {
         // opaque pass, so a camera without `DeferredPrepass` renders nothing at
         // all rather than rendering something worse — which is why the minimap
         // gets one too, over in `ui::minimap`.
-        app.insert_resource(DefaultOpaqueRendererMethod::deferred())
+        app.add_plugins((volumetrics::VolumetricsPlugin, post::PostPlugin))
+            .insert_resource(DefaultOpaqueRendererMethod::deferred())
             .init_resource::<Capabilities>()
             .add_systems(Startup, (probe_capabilities, spawn_atmosphere))
             .add_systems(
@@ -198,8 +205,25 @@ fn spawn_atmosphere(mut commands: Commands, mut mediums: ResMut<Assets<Scatterin
 /// in real units: the sun is five orders of magnitude brighter than a street
 /// lamp, so any single setting either blows out the day or blacks out the
 /// night. Eyes solve this by adapting, and so does this.
-fn adapt_exposure(clock: Res<TimeOfDay>, mut cameras: Query<&mut Exposure, With<CameraRig>>) {
-    let ev100 = NIGHT_EV100 + (DAY_EV100 - NIGHT_EV100) * daylight(clock.hours);
+///
+/// This is the *base*, and it stays the base at every tier. It is driven from
+/// the sun's position, which means it knows what time it is — something no
+/// histogram can work out from a picture. `post::sync_post` adds a bounded
+/// measured correction on top of it for where the camera happens to be looking;
+/// see `post::METER_AUTHORITY` for why that correction is not allowed to be the
+/// whole of it.
+fn adapt_exposure(
+    clock: Res<TimeOfDay>,
+    weather: Res<Weather>,
+    mut cameras: Query<&mut Exposure, With<CameraRig>>,
+) {
+    // Against how bright it is *outside*, not against where the sun is. Cloud
+    // takes nine tenths of the direct beam, so a camera metered for the sun's
+    // elevation alone comes out three stops under on an overcast afternoon —
+    // and the automatic correction is deliberately bounded well short of
+    // recovering three stops, because a correction that large is exactly the
+    // one it must not be allowed to make after dark. Better to meter it right.
+    let ev100 = NIGHT_EV100 + (DAY_EV100 - NIGHT_EV100) * brightness(clock.hours, weather.cover);
     for mut exposure in &mut cameras {
         if (exposure.ev100 - ev100).abs() > f32::EPSILON {
             exposure.ev100 = ev100;

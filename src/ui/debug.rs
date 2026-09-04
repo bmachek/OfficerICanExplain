@@ -19,6 +19,7 @@ use crate::render::quality::{AoQuality, Capabilities, QualityPreset};
 use crate::vehicle::controller::VehicleState;
 use crate::vehicle::damage::VehicleHealth;
 use crate::vehicle::spec::VehicleSpec;
+use crate::world::weather::Weather;
 
 pub struct DebugUiPlugin;
 
@@ -32,6 +33,7 @@ impl Plugin for DebugUiPlugin {
 fn tuning_panel(
     mut contexts: EguiContexts,
     mut config: ResMut<GameConfig>,
+    mut weather: ResMut<Weather>,
     caps: Res<Capabilities>,
     state: Res<State<AppState>>,
     cameras: Query<(&Transform, &CameraRig)>,
@@ -75,8 +77,7 @@ fn tuning_panel(
             ui.add(egui::Slider::new(&mut config.audio.ambience, 0.0..=1.5).text("ambience"));
 
             ui.separator();
-            ui.label(egui::RichText::new("weather").strong());
-            ui.add(egui::Slider::new(&mut config.world.wetness, 0.0..=1.0).text("wetness"));
+            weather_section(ui, &mut weather, &mut config);
 
             ui.separator();
             graphics_section(ui, &mut config, &caps);
@@ -107,6 +108,32 @@ fn tuning_panel(
         });
 
     Ok(())
+}
+
+/// The live sky, and a way to take it over.
+///
+/// Weather runs itself now, which is exactly what makes a panel necessary: the
+/// interesting states — a front rolling in, a road drying out — take game hours
+/// to arrive on their own, and nobody tuning the look of rain is going to wait
+/// for it. Dragging a slider is an override, so the sliders read back the
+/// simulation until they are touched and the simulation carries on from
+/// wherever they were left.
+fn weather_section(ui: &mut egui::Ui, weather: &mut Weather, config: &mut GameConfig) {
+    ui.label(egui::RichText::new("weather").strong());
+    ui.add(egui::Slider::new(&mut weather.cover, 0.0..=1.0).text("cloud"));
+    ui.add(egui::Slider::new(&mut weather.wetness, 0.0..=1.0).text("wetness"));
+    ui.label(format!(
+        "rain {:.2}   wind {:.1} m/s   hour {:+.1}",
+        weather.rain,
+        weather.wind_speed(),
+        weather.elapsed,
+    ));
+    // The one control that is not an override: with the clock stopped, nothing
+    // above moves on its own, and that is how a screenshot holds still.
+    ui.add(
+        egui::Slider::new(&mut config.world.day_length_seconds, 0.0..=1800.0)
+            .text("day length (s)"),
+    );
 }
 
 /// Renderer tier, and what it resolved to.

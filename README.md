@@ -64,7 +64,7 @@ following and start ramming.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, tunables, deterministic RNG, screenshot tool |
-| `world` | City generator, road graph, chunk streaming, day/night, lights, street furniture, roofs, wet roads |
+| `world` | City generator, road graph, chunk streaming, day/night, weather, lights, street furniture, roofs, wet roads |
 | `player` | Input mapping, character controller, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, damage, parked-car spawning |
 | `ai` | Traffic, pedestrians, police pursuit, shared steering, walk cycles |
@@ -73,7 +73,7 @@ following and start ramming.
 | `mission` | Objective state machine, mission chain, money |
 | `ui` | HUD, minimap, dev tuning panel |
 | `save` | RON quick save / load |
-| `render` | Quality presets, atmosphere, exposure, bloom, shadows, ambient occlusion, anti-aliasing |
+| `render` | Quality presets, atmosphere, exposure, bloom, shadows, ambient occlusion, anti-aliasing, volumetrics, grading, the post stack |
 | `audio` | Sound synthesis, the sound bank, and what triggers what |
 
 The world is fully reproducible from `GameConfig::world_seed`, so a save stores
@@ -107,7 +107,7 @@ cargo run --features raytracing
 ## Development
 
 ```sh
-cargo test                                  # 208 tests
+cargo test                                  # 237 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -128,8 +128,8 @@ cargo run -- --screenshot shots/map.png    --follow --map
 ```
 
 `tools/shoot.sh` renders the whole battery — aerial, street, dusk, night, rain,
-bodywork, showroom, driving, map — so a rendering change can be judged against
-the last one rather than against a memory of it. `--all-presets` shoots every
+dawn, overcast, bodywork, showroom, driving, map — so a rendering change can be
+judged against the last one rather than against a memory of it. `--all-presets` shoots every
 tier into `shots/<preset>/`, and frame times are collected at the end, because
 a screenshot says a change looks right and says nothing about whether it can be
 afforded.
@@ -141,12 +141,13 @@ afforded.
 | `--at-car` | Frame the nearest parked car, three-quarters on |
 | `--damage F` | Beat that car up first, 0 to 1 |
 | `--showroom` | Park one of every archetype in a row and shoot it |
-| `--wet F` | Soak the ground, 0 to 1; above a third it rains |
+| `--wet F` | Soak the ground, 0 to 1 |
+| `--cover F` | Cloud over the city, 0 to 1; above about seven tenths it rains |
 | `--eye H` | Eye height for `--at-node` |
 | `--follow` | Use the real third-person camera |
 | `--drive` | Take the nearest car and drive it (also logs telemetry) |
 | `--map` | Open the full-screen map |
-| `--hour H` | Freeze the clock at hour H |
+| `--hour H` | Freeze the clock at hour H, and the weather with it |
 | `--stream-radius M` | Load more of the city than a player would |
 | `--frames N` | Frames to render before capturing |
 | `--quality Q` | Renderer tier: `low`, `medium`, `high`, `ultra`, `photo` |
@@ -287,11 +288,109 @@ The shadow filter follows the upscaling setting rather than the quality tier.
 something resolves that variation afterwards; with no temporal pass it is
 noise.
 
+## Air
+
+Everything else in this renderer is about surfaces: what the light does when it
+lands on something. Volumetric fog is about the space in between — the shaft
+that comes down a side street when the sun is low, the cone standing under a
+street lamp at night, the way a city thickens up in rain. It is the most
+recognisable "expensive renderer" marker there is, and also the one that most
+needs restraint: fog dense enough to be obvious is fog dense enough to eat the
+city.
+
+Three pieces have to be present together or none of it happens: a
+`VolumetricFog` on the camera to run the raymarch, a `FogVolume` in the world
+saying *where* the air is, and a `VolumetricLight` on every light allowed to
+shine through it. Not all of them — the cost is per light per raymarch step. The
+sun comes in as soon as there is any fog at all, because it is one light and it
+is the one that makes the shafts; the sixty-four street lamps come in only at
+the top tier, and that is where the tier boundary is.
+
+Density is per metre and the march attenuates by `exp(-distance × density ×
+0.6)`. Bevy's default of 0.1 fogs a surface out completely inside a hundred
+metres, which is the right number for a room and three orders of magnitude wrong
+for a city, so everything here is in thousandths. That thin air is also why the
+volume's light term is driven above one: in-scattered brightness scales with
+density, so air thin enough to see a city through is too thin to show a shaft
+honestly. Nudging the light rather than the density buys the shafts without the
+soup, and it fades back towards honest as real weather thickens the air.
+
+Two things about the box turned out to matter more than anything in the shader.
+It is a **layer**, seventy metres deep, not a column tall enough to clear
+downtown — fog *is* a ground layer, a tower standing out of the top of one is
+something you can photograph, and the shorter the box the less of it a skyward
+ray crosses, which is what caps the density. Bringing the ceiling down to a
+plausible fog depth bought back most of a factor of three. And it **follows the
+camera at a couple of hundred metres**, not the streamed city, because Bevy dims
+every light's contribution by `exp(-density × bounding_radius × 0.6)` where the
+radius is the volume's own half-diagonal: sized to the city, that radius dimmed a
+clear night's lamp cones by four and a rainstorm's by seven hundred. A bigger
+volume with less visible fog in it is the trap this module is built around.
+
+## Grade
+
+A day/night cycle in real units gets the *brightness* of an hour right and says
+nothing about its colour. Six in the morning and six in the evening are the same
+sun at the same angle, and they do not look alike; what separates them is
+grading, and it is most of what people mean by a game looking cinematic. Warmth
+is pushed past the physical answer while the sun is low and still up, pulled
+cold through the small hours where sodium is the only warm light left, and
+pulled cold again by cloud at any hour. Saturation comes down with cover and
+with darkness, because past dusk the eye is running on rods and has hardly any
+colour vision left — a fully saturated night is the single most common thing
+that makes a game look like a game.
+
+Auto exposure runs on top of that, and is deliberately not allowed to do its
+whole job. Metering the frame to middle grey would hand back the five stops
+between noon and midnight that the physical lighting model exists to earn, and
+night would come out as a slightly blue afternoon. But the histogram knows one
+thing the clock cannot: where the camera is pointed — into a shadowed courtyard,
+at a lit shopfront, down a black alley. So it is given partial authority instead
+of none, through a compensation curve that is a straight line of slope 0.72.
+Bevy computes `target = compensation(measured) − measured`, so a line of that
+slope anchored at a correctly exposed frame corrects by roughly a third of a
+stop for every stop the frame is away from one: a dark courtyard lifts, and a
+night stays a night.
+
+Motion blur is a half-open shutter, which is the cinema convention and the most
+a 60fps frame can smear without stretching an object further than it actually
+travelled. Depth of field pulls focus by casting one ray down the view axis and
+focusing on what it hits, racked over about a third of a second rather than
+snapped — a fixed focal distance would be worse than none at all, since it would
+blur the car in a showroom shot and sharpen the wall behind it.
+
+Lens distortion is the one effect in the stack deliberately left out. A
+barrel-distorted frame is a real photographic artefact and the wrong one here: a
+city is made of straight lines meeting at right angles, and bending them at the
+edge of the frame does not read as a lens, it reads as a mistake.
+
 ## Weather
 
-Rain is two things, and the second is the one that matters. Falling rain is a
-few thousand streaks kept in a box around the camera, wrapped rather than
-respawned. *Wet ground* is what changes the picture: soaked asphalt goes darker
+Three values, and only one of them is remembered. **Cloud cover** is sampled from
+a slow noise over the world clock, so the sky changes on its own and changes the
+same way on every run of the same seed. **Rainfall** falls out of cover — a clear
+sky does not rain, and it takes a nearly solid overcast before it does.
+**Wetness** is the state: it soaks up under rain and dries off in sun and wind,
+which is why a street stays glossy for a while after a shower and why the
+reflections outlast the streaks.
+
+All three move on *game* hours rather than wall-clock seconds, so freezing the
+clock freezes the weather with it. That is the whole reproducibility story:
+`--hour` already stopped the sun, and now it stops the sky as well.
+
+What cover then *does* is spread across the modules that own each surface rather
+than centralised in one place. The direct beam falls away and the skylight
+replacing it climbs, so an overcast city goes flat rather than dark; the warmth
+goes out of a low sun, so a sunset under solid cloud is grey; the shadow penumbra
+widens, because an overcast sky is one enormous area light; the air thickens and
+the haze closes in; the grade cools and flattens; and the city's windows come on
+for a dark afternoon, because they are wired to how bright it is outside rather
+than to the clock.
+
+Rain itself is two things, and the second is the one that matters. Falling rain
+is a few thousand streaks kept in a box around the camera, wrapped rather than
+respawned, and leaning into the wind. *Wet ground* is what changes the picture:
+soaked asphalt goes darker
 and far glossier, and at the grazing angles a street is actually seen from it
 stops being a surface and starts being a mirror for the sky and every lit window
 above it.
@@ -314,8 +413,10 @@ flattening the asphalt's own normal map leaves every grain of chipping throwing
 its own highlight off a near-mirror, and the road comes out glittering like
 crushed glass. Damp asphalt keeps its texture; a puddle does not have one.
 
-Wetness is still a dial (`--wet`, or the dev panel), not a simulation. Deciding
-when it rains is a separate job from being able to show it.
+Both halves of the weather can still be taken over by hand — `--wet` and
+`--cover` on the command line, sliders in the dev panel — because the
+interesting states take game hours to arrive on their own and nobody tuning the
+look of rain is going to wait for one.
 
 ## Vehicles
 
@@ -373,8 +474,27 @@ pursuit, and everything but the player's own car is positioned in the world.
 
 ## Known limitations
 
-- Weather is a dial rather than a system: nothing decides when it rains, and
-  nothing dries out.
+- The sky itself has no clouds in it. Bevy's atmosphere is a scattering model, so
+  cover is expressed entirely through the light — dimmer, flatter, cooler,
+  hazier, no hard shadows — and the dome overhead stays blue however hard it is
+  raining. Everything the weather does is right; the thing you would photograph
+  it against is not.
+
+- Cloud shadows do not move across the city. Cover dims the sun everywhere at
+  once, which is exactly right for a solid overcast and wrong for broken cloud on
+  a windy day. A real one needs the pattern projected into the light, not a
+  multiplier on it.
+
+- There are no discrete god rays, because there is nothing yet to cast them. The
+  air lights up towards a low sun and goes dark away from it, which is the
+  physics working; a *shaft* additionally needs a hard-edged gap in an occluder,
+  and a city of extruded boxes on a grid has very few. Cornices, balconies,
+  street trees and railings are what turn the glow into rays — which is Phase 4.
+
+- The volumetric fog is one box that follows the camera, so from far enough away
+  the air stops. Anything past it is hazed by the atmosphere's aerial
+  perspective and the distance fog instead, which is a different model with a
+  different look; the seam is soft, but it is there.
 
 - Buildings are still an extrusion with a parapet and roof clutter on top.
   Window reveals, cornices and balconies are geometry the facade texture only
