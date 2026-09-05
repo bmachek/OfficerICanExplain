@@ -29,15 +29,31 @@ use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 
 use super::citygen::{Block, Building, District, PALETTE_SIZE};
+use bevy::camera::visibility::VisibilityRange;
+use bevy::light::NotShadowCaster;
+
+use super::rooftop::{self, RoofKit};
+use super::shell::{self, ShellKit};
 use super::texture::{self, FacadeClass};
 
 /// Pavement height above the road surface.
 pub const SIDEWALK_HEIGHT: f32 = 0.28;
 
-/// Height of the parapet slab capping every building.
-const ROOF_THICKNESS: f32 = 0.55;
-/// How far the roof slab oversails the walls, in metres.
-const ROOF_OVERHANG: f32 = 0.18;
+/// Height of the plinth course at the foot of every building, in metres.
+///
+/// Buildings met the pavement at a bare edge, which is the join a real street
+/// never has: there is always a plinth, a step, a stall riser or at minimum a
+/// change of material, and its shadow line is what makes a wall look like it is
+/// *standing on* the ground rather than pushed into it.
+const PLINTH_HEIGHT: f32 = 0.62;
+/// How far the plinth stands proud of the wall above it.
+const PLINTH_PROUD: f32 = 0.11;
+/// How far away the plinth stops being drawn, before `lod_scale`.
+///
+/// It is eleven centimetres deep. Past a couple of hundred metres that is well
+/// under a pixel, and all it contributes is another edge for the anti-aliasing
+/// to chew on.
+const PLINTH_RANGE: f32 = 260.0;
 
 /// Roughly how wide a paving slab or a patch of grass should be, in metres.
 const GROUND_TILE: f32 = 2.6;
@@ -235,7 +251,8 @@ pub fn build_assets(
             // whether it is turned — belongs to the palette slot, so a street
             // of one district is not a street of one photograph.
             let grain = super::facade::FacadeGrain::for_district(library, district, slot);
-            for (base, emissive, surface, normal) in &facades {
+            for (&class, (base, emissive, surface, normal)) in FacadeClass::ALL.iter().zip(&facades)
+            {
                 building.push(facades_out.add(super::facade::FacadeMaterial {
                     base: StandardMaterial {
                         base_color: color,
@@ -249,7 +266,7 @@ pub fn build_assets(
                         metallic: 1.0,
                         ..default()
                     },
-                    extension: grain.clone(),
+                    extension: grain.clone().for_class(class),
                 }));
             }
         }
@@ -361,7 +378,22 @@ impl CityAssets {
 }
 
 /// Spawns one block's pavement and buildings, tagged for streaming.
-pub fn spawn_block(commands: &mut Commands, assets: &CityAssets, block: &Block, chunk: IVec2) {
+/// Everything spawning a block needs beyond the block itself.
+///
+/// A struct rather than five more positional arguments: the roofs need the
+/// world seed to be reproducible and the level-of-detail scale to know how far
+/// to draw, and threading those through as bare parameters was already the
+/// point at which the call became unreadable.
+pub struct BlockContext<'a> {
+    pub assets: &'a CityAssets,
+    pub roofs: &'a RoofKit,
+    pub shells: &'a ShellKit,
+    pub seed: u64,
+    pub lod_scale: f32,
+}
+
+pub fn spawn_block(commands: &mut Commands, ctx: &BlockContext, block: &Block, chunk: IVec2) {
+    let assets = ctx.assets;
     let area = block.area;
     let size = area.size();
     let center = area.center();
@@ -406,28 +438,79 @@ pub fn spawn_block(commands: &mut Commands, assets: &CityAssets, block: &Block, 
     ));
 
     for building in &block.buildings {
-        spawn_building(commands, assets, block.district, building, chunk);
+        spawn_building(commands, ctx, block.district, building, chunk);
     }
 }
 
 fn spawn_building(
     commands: &mut Commands,
-    assets: &CityAssets,
+    ctx: &BlockContext,
     district: District,
     building: &Building,
     chunk: IVec2,
 ) {
+    let assets = ctx.assets;
     let size = building.footprint.size();
     let center = building.footprint.center();
     let height = building.height;
     let class = FacadeClass::for_height(height);
 
+    // One seed for everything about this building's roof, derived from where it
+    // stands. Chunks regenerate on re-entry, so anything keyed on spawn order
+    // would give the same building a different roof each time.
+    let seed = rooftop::seed_for(ctx.seed, building.footprint);
+    let parapet = rooftop::parapet(seed, class);
+
+    // The wall, at three levels of detail. All three carry the same transform
+    // and the same material, and `use_aabb: false` measures from the entity's
+    // origin, so all three measure the same distance and hand over to one
+    // another on precisely the same metre — which is what Bevy needs before it
+    // will dither one into the next instead of blinking between them.
+    let material = assets.material_for(district, building.palette, class);
+    let wall = Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
+        .with_scale(Vec3::new(size.x, height, size.y));
+    let (near, far) = shell::ranges(ctx.lod_scale);
+    // Which balconies and which awnings, from the building's own seed rather
+    // than from a counter, for the same reason its roof is.
+    let variant = (seed >> 19) as u32;
+
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(ctx.shells.get(class, shell::Detail::Full, variant)),
+        MeshMaterial3d(material.clone()),
+        wall,
+        VisibilityRange {
+            start_margin: 0.0..0.0,
+            end_margin: shell::handover(near),
+            use_aabb: false,
+        },
+    ));
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(ctx.shells.get(class, shell::Detail::Coarse, variant)),
+        MeshMaterial3d(material.clone()),
+        wall,
+        VisibilityRange {
+            start_margin: shell::handover(near),
+            end_margin: shell::handover(far),
+            use_aabb: false,
+        },
+    ));
+    // The plain box, and with it the collider — which is deliberately on the
+    // level of detail that is never culled by *distance*, only by being close.
+    // A visibility range hides a mesh and does not touch its collider, so the
+    // building stays solid at every distance; putting it anywhere else would
+    // work today and break the first time these ranges are reordered.
     commands.spawn((
         ChunkOf(chunk),
         Mesh3d(assets.unit_cube.clone()),
-        MeshMaterial3d(assets.material_for(district, building.palette, class)),
-        Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
-            .with_scale(Vec3::new(size.x, height, size.y)),
+        MeshMaterial3d(material),
+        wall,
+        VisibilityRange {
+            start_margin: shell::handover(far),
+            end_margin: f32::INFINITY..f32::INFINITY,
+            use_aabb: false,
+        },
         RigidBody::Static,
         // Unit cube: Avian scales it by the transform above.
         Collider::cuboid(1.0, 1.0, 1.0),
@@ -437,21 +520,64 @@ fn spawn_building(
     // face of the cube, and the overhang reads as a parapet from street level —
     // which is most of what stops a box looking like a box. Visual only: the
     // wall collider already reaches this high.
+    //
+    // Its proportions come from the building's own seed rather than from a
+    // constant. That costs nothing — the slab was already an entity with its
+    // own transform — and it is the only variation in the roofline that still
+    // reads from a kilometre up, where the clutter below is sub-pixel.
     commands.spawn((
         ChunkOf(chunk),
         Mesh3d(assets.unit_cube.clone()),
         MeshMaterial3d(assets.roof.clone()),
         Transform::from_xyz(
             center.x,
-            height + SIDEWALK_HEIGHT + ROOF_THICKNESS * 0.5,
+            height + SIDEWALK_HEIGHT + parapet.thickness * 0.5,
             center.y,
         )
         .with_scale(Vec3::new(
-            size.x + ROOF_OVERHANG * 2.0,
-            ROOF_THICKNESS,
-            size.y + ROOF_OVERHANG * 2.0,
+            size.x + parapet.overhang * 2.0,
+            parapet.thickness,
+            size.y + parapet.overhang * 2.0,
         )),
     ));
+
+    // The plinth course. Shares the kerb material on purpose — the base of a
+    // building and the kerb in front of it are the two things at street level
+    // that take the most abuse, and in most cities they are the same stone.
+    let plinth_draw = (PLINTH_RANGE * ctx.lod_scale).max(1.0);
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(assets.unit_cube.clone()),
+        MeshMaterial3d(assets.kerb.clone()),
+        Transform::from_xyz(center.x, SIDEWALK_HEIGHT + PLINTH_HEIGHT * 0.5, center.y).with_scale(
+            Vec3::new(
+                size.x + PLINTH_PROUD * 2.0,
+                PLINTH_HEIGHT,
+                size.y + PLINTH_PROUD * 2.0,
+            ),
+        ),
+        VisibilityRange {
+            start_margin: 0.0..0.0,
+            end_margin: (plinth_draw * 0.9)..plinth_draw,
+            use_aabb: false,
+        },
+        // The wall behind it casts the same shadow from the same place. A
+        // second caster eleven centimetres in front buys nothing and costs a
+        // pass over every building in the city.
+        NotShadowCaster,
+    ));
+
+    // And what accumulated on the deck. Sits on top of the slab, so nothing is
+    // buried in it and nothing floats over it.
+    rooftop::spawn(
+        commands,
+        ctx.roofs,
+        ChunkOf(chunk),
+        center,
+        height + SIDEWALK_HEIGHT + parapet.thickness,
+        &rooftop::plan(seed, building.footprint, class),
+        ctx.lod_scale,
+    );
 }
 
 #[cfg(test)]

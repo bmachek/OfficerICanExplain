@@ -376,7 +376,10 @@ impl FacadeClass {
     }
 
     /// Windows across, floors up.
-    fn grid(self) -> (f32, f32) {
+    ///
+    /// Public because the shell geometry in `world::shell` is built on exactly
+    /// this grid. A reveal cut anywhere else lands beside its own window.
+    pub fn grid(self) -> (f32, f32) {
         match self {
             FacadeClass::House => (3.0, 2.0),
             FacadeClass::Lowrise => (5.0, 4.0),
@@ -390,18 +393,54 @@ impl FacadeClass {
     /// A house does not. Its ground floor is a front door and the same windows
     /// as upstairs, and giving it a shop window turns a residential street into
     /// a high street.
-    fn has_shopfronts(self) -> bool {
+    pub fn has_shopfronts(self) -> bool {
         !matches!(self, FacadeClass::House)
     }
 
     /// Fraction of each cell the glass fills, horizontally and vertically.
-    fn glazing(self) -> (f32, f32) {
+    pub fn glazing(self) -> (f32, f32) {
         match self {
             FacadeClass::House => (0.46, 0.50),
             FacadeClass::Lowrise => (0.56, 0.52),
             FacadeClass::Midrise => (0.70, 0.56),
             // Curtain wall: glass edge to edge, hairline mullions.
             FacadeClass::Tower => (0.88, 0.72),
+        }
+    }
+
+    /// Where the glass sits inside one cell, as fractions of that cell.
+    ///
+    /// The single description of the window grid. It is read twice — once here
+    /// to paint the facade, and once by `world::shell` to cut the reveal out of
+    /// the geometry — and the two have to agree to the last decimal or every
+    /// window in the city has its frame a hand's width to one side.
+    pub fn pane(self, row: u32) -> Pane {
+        let (glass_w, glass_h) = self.glazing();
+
+        // The ground storey is not a storey of rooms, and drawing it as one is
+        // the single clearest sign that a facade was generated: real streets
+        // are shops and lobbies at eye level with flats above, and eye level is
+        // the only part a pedestrian ever looks at closely.
+        if row == 0 && self.has_shopfronts() {
+            // A shopfront runs nearly the full bay, from a low stallriser up to
+            // the sign board.
+            return Pane {
+                u0: 0.08,
+                u1: 0.92,
+                v0: 0.16,
+                v1: 0.74,
+                ground: true,
+            };
+        }
+
+        // Panes sit slightly above centre in their cell, leaving a spandrel
+        // below.
+        Pane {
+            u0: 0.5 - glass_w * 0.5,
+            u1: 0.5 + glass_w * 0.5,
+            v0: 0.62 - glass_h * 0.5,
+            v1: 0.62 + glass_h * 0.5,
+            ground: false,
         }
     }
 
@@ -413,6 +452,33 @@ impl FacadeClass {
             FacadeClass::Midrise => 0.38,
             FacadeClass::Tower => 0.30,
         }
+    }
+}
+
+/// Where the sign board over a shopfront sits, as fractions of its cell.
+///
+/// Shared with `world::shell`, which stands the board proud of the wall.
+pub const FASCIA: (f32, f32) = (0.78, 0.97);
+
+/// Where the glass sits inside one cell of the window grid.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pane {
+    pub u0: f32,
+    pub u1: f32,
+    pub v0: f32,
+    pub v1: f32,
+    /// True on the ground storey, which is a shopfront rather than a room.
+    pub ground: bool,
+}
+
+impl Pane {
+    /// Wall left over between the glass and the edge of its cell: left, right,
+    /// below, above.
+    ///
+    /// Every one of them has to be greater than zero, or a reveal has no wall
+    /// to sit in and the geometry degenerates — see the tests.
+    pub fn margins(&self) -> [f32; 4] {
+        [self.u0, 1.0 - self.u1, self.v0, 1.0 - self.v1]
     }
 }
 
@@ -456,36 +522,24 @@ struct Cell {
 /// Resolves a UV into the window grid. `v` runs up the building.
 fn cell_at(class: FacadeClass, u: f32, v: f32) -> Cell {
     let (columns, rows) = class.grid();
-    let (glass_w, glass_h) = class.glazing();
 
     let su = u * columns;
     let sv = v * rows;
     let (column, row) = (su.floor(), sv.floor());
     let (fu, fv) = (su - column, sv - row);
 
-    // The ground storey is not a storey of rooms, and drawing it as one is the
-    // single clearest sign that a facade was generated: real streets are shops
-    // and lobbies at eye level with flats above, and eye level is the only part
-    // a pedestrian ever looks at closely.
-    let ground = row < 1.0 && class.has_shopfronts();
-
-    // Panes sit slightly above centre in their cell, leaving a spandrel below.
-    // A shopfront instead runs nearly the full bay, from a low stallriser up to
-    // the sign board.
-    let (u0, u1, v0, v1) = if ground {
-        (0.08, 0.92, 0.16, 0.74)
-    } else {
-        (
-            0.5 - glass_w * 0.5,
-            0.5 + glass_w * 0.5,
-            0.62 - glass_h * 0.5,
-            0.62 + glass_h * 0.5,
-        )
-    };
+    let pane_rect = class.pane(row.max(0.0) as u32);
+    let Pane {
+        u0,
+        u1,
+        v0,
+        v1,
+        ground,
+    } = pane_rect;
 
     // The sign board sits between the top of the glazing and the floor line.
     let fascia = if ground {
-        smoothstep01((fv - 0.78) / 0.03) * smoothstep01((0.97 - fv) / 0.02)
+        smoothstep01((fv - FASCIA.0) / 0.03) * smoothstep01((FASCIA.1 - fv) / 0.02)
     } else {
         0.0
     };

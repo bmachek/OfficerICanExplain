@@ -14,6 +14,8 @@
 //!   cargo run -- --screenshot shots/city.png
 //!   cargo run -- --screenshot shots/city.png --at 0,400,600 --look 0,0,0
 //!   cargo run -- --screenshot shots/city.png --frames 120
+//!   cargo run -- --screenshot shots/city.png --quality ultra --fps-log
+//!   cargo run -- --screenshot shots/city.png --hour 21.5 --cover 1 --wet 0.9
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,10 +28,12 @@ use bevy::image::Image;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
+use bevy::time::Real;
 
 use crate::player::camera::{CameraMode, CameraRig};
 use crate::player::interact::{DrivenBy, Driving};
 use crate::player::on_foot::Player;
+use crate::render::quality::QualityPreset;
 use crate::vehicle::controller::VehicleInput;
 use crate::vehicle::spawn::Vehicle;
 
@@ -70,8 +74,22 @@ pub struct CaptureRequest {
     /// Lines one of every archetype up down the street and shoots the row.
     /// The only way to compare bodywork without hunting the city for a pickup.
     pub showroom: bool,
-    /// Soaks the ground, 0 to 1. Above about a third it also rains.
+    /// Soaks the ground, 0 to 1.
     pub wetness: f32,
+    /// Puts this much cloud over the city, 0 to 1. Above about seven tenths it
+    /// also rains — which is the only way to shoot rain, now that rainfall comes
+    /// out of the sky rather than out of the ground being wet.
+    pub cover: f32,
+    /// Which renderer tier to shoot at. The whole point of a preset ladder is
+    /// being able to put two tiers side by side in the same framing, and that
+    /// needs the choice on the command line rather than in a config file.
+    pub quality: QualityPreset,
+    /// Logs frame times over the warmup run alongside the capture.
+    ///
+    /// A screenshot proves a change looks right; it says nothing about whether
+    /// it can be afforded. From the point geometry density starts moving, this
+    /// is the other half of the evidence.
+    pub fps_log: bool,
     /// Puts the player in the nearest car and holds the throttle down.
     /// An end-to-end smoke test of enter -> drive -> chase camera that needs
     /// nobody at the keyboard.
@@ -86,6 +104,13 @@ struct CaptureProgress {
     frame: u32,
     triggered: bool,
     saved: Arc<AtomicBool>,
+    /// Frame durations in milliseconds, oldest first.
+    ///
+    /// Kept whole rather than reduced to a running mean because the number that
+    /// matters for a sixty-a-second budget is not the average, it is how bad
+    /// the slow frames get — a mean hides exactly the stutter that is worth
+    /// knowing about.
+    frame_times: Vec<f32>,
 }
 
 /// True when the process was launched to take a screenshot. Used to strip the
@@ -137,6 +162,15 @@ pub fn parse_args() -> Option<CaptureRequest> {
         wetness: value_of("--wet")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.0),
+        // A fair day unless asked otherwise. Deliberately *not* the seed's own
+        // weather: every framing in the battery has to mean the same thing from
+        // one run to the next, and "whatever the sky happened to be doing"
+        // would make every shot an argument about the weather.
+        cover: value_of("--cover")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0.18),
+        quality: crate::render::preset_from_arg(value_of("--quality").as_deref()),
+        fps_log: args.iter().any(|a| a == "--fps-log"),
         follow: args.iter().any(|a| a == "--follow"),
         drive: args.iter().any(|a| a == "--drive"),
         map: args.iter().any(|a| a == "--map"),
@@ -162,6 +196,7 @@ impl Plugin for CapturePlugin {
                 frame: 0,
                 triggered: false,
                 saved: Arc::new(AtomicBool::new(false)),
+                frame_times: Vec::new(),
             })
             .add_systems(PreStartup, apply_capture_overrides)
             .add_systems(PostStartup, retarget_camera_offscreen)
@@ -179,18 +214,20 @@ fn apply_capture_overrides(
     mut config: ResMut<crate::core::config::GameConfig>,
     mut map_open: ResMut<crate::ui::minimap::MapOpen>,
 ) {
+    config.graphics = request.quality.settings();
+
     if let Some(radius) = request.stream_radius {
         config.world.stream_radius = radius;
     }
     if request.map {
         map_open.0 = true;
     }
-    if request.wetness > 0.0 {
-        config.world.wetness = request.wetness;
-    }
+    config.world.start_wetness = request.wetness;
+    config.world.start_cover = request.cover;
     if let Some(hour) = request.hour {
         config.world.start_hour = hour;
-        // Freeze it, so the warmup frames do not drift the sky.
+        // Freeze it, so the warmup frames do not drift the sky. Weather runs on
+        // the same clock, so this holds the cloud and the wetness with it.
         config.world.day_length_seconds = 0.0;
     }
 }
@@ -276,15 +313,28 @@ fn drive_capture(
     request: Res<CaptureRequest>,
     target: Res<CaptureTarget>,
     mut progress: ResMut<CaptureProgress>,
+    time: Res<Time<Real>>,
     mut exit: MessageWriter<AppExit>,
     drawables: Query<(), With<Mesh3d>>,
     cameras: Query<&Transform, With<CameraRig>>,
     subjects: Query<(&Transform, &crate::combat::health::Health), With<Player>>,
 ) {
     progress.frame += 1;
+    if request.fps_log && !progress.triggered {
+        // `Time<Real>`, not the default virtual clock: that one clamps its
+        // delta at 250 ms so a long frame cannot make the simulation take a
+        // huge step. Perfectly correct for gameplay, and exactly wrong here —
+        // it saturates on precisely the slow frames a budget is decided by, and
+        // reports them all as an identical 250.00 ms.
+        progress.frame_times.push(time.delta_secs() * 1000.0);
+    }
 
     if !progress.triggered && progress.frame >= request.warmup_frames {
         progress.triggered = true;
+
+        if request.fps_log {
+            info!("{}", frame_time_summary(&progress.frame_times));
+        }
 
         // Logged so a blank image can be told apart from an empty scene.
         let camera = cameras
@@ -564,4 +614,78 @@ fn line_up_showroom(
         rig.pitch = pitch;
     }
     *done = true;
+}
+
+/// Reduces a warmup run's frame times to the three numbers worth reporting.
+///
+/// The first frames of any run are pipeline compilation and streaming, not
+/// rendering, and including them would make every measurement look terrible
+/// regardless of the change being judged — so the opening quarter is dropped.
+/// What is left is reported as a median and a 95th percentile, because a budget
+/// is kept or missed by the slow frames rather than by the typical one.
+fn frame_time_summary(samples: &[f32]) -> String {
+    // A handful of frames is not a measurement, and a percentile over three
+    // samples is arithmetic rather than evidence. Say so instead.
+    const MIN_SAMPLES: usize = 8;
+    if samples.len() < MIN_SAMPLES {
+        return "frame times: too few frames to report".into();
+    }
+
+    let mut sorted: Vec<f32> = samples[samples.len() / 4..].to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let at = |fraction: f32| {
+        let last = sorted.len() - 1;
+        sorted[((last as f32) * fraction).round() as usize]
+    };
+
+    let median = at(0.5);
+    let p95 = at(0.95);
+    let worst = sorted[sorted.len() - 1];
+    format!(
+        "frame times over {} frames: median {median:.2} ms ({:.0} fps), p95 {p95:.2} ms, worst {worst:.2} ms",
+        sorted.len(),
+        1000.0 / median.max(f32::EPSILON),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_opening_frames_are_left_out_of_the_summary() {
+        // Four catastrophic startup frames, then twelve good ones. A mean over
+        // the lot would read 30 ms; the number that matters reads 10.
+        let mut samples = vec![200.0; 4];
+        samples.extend(std::iter::repeat_n(10.0, 12));
+
+        let summary = frame_time_summary(&samples);
+        assert!(summary.contains("median 10.00 ms"), "{summary}");
+        assert!(summary.contains("over 12 frames"), "{summary}");
+    }
+
+    #[test]
+    fn the_slow_frames_are_reported_rather_than_averaged_away() {
+        let mut samples = vec![8.0; 96];
+        samples[90] = 42.0;
+
+        let summary = frame_time_summary(&samples);
+        assert!(summary.contains("worst 42.00 ms"), "{summary}");
+        assert!(summary.contains("median 8.00 ms"), "{summary}");
+    }
+
+    #[test]
+    fn a_run_too_short_to_measure_says_so_rather_than_dividing_by_zero() {
+        assert!(frame_time_summary(&[]).contains("too few"));
+        assert!(frame_time_summary(&[16.0]).contains("too few"));
+    }
+
+    /// The headline is frames per second, and getting the reciprocal backwards
+    /// is the kind of thing that survives review because both numbers look
+    /// plausible.
+    #[test]
+    fn the_frame_rate_is_the_reciprocal_of_the_median() {
+        let summary = frame_time_summary(&[16.666_667; 40]);
+        assert!(summary.contains("60 fps"), "{summary}");
+    }
 }

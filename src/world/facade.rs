@@ -10,6 +10,11 @@
 //! instead of the building, so a two-storey house and a forty-storey tower can
 //! share one material. Without that the material count picks up a size bucket
 //! dimension, and the city's twenty-odd draw calls become several hundred.
+//!
+//! The extension shades in both pipelines. Screen-space reflections read a
+//! g-buffer and so require the deferred path, and a material that only
+//! implemented the forward one would quietly write walls into that g-buffer
+//! without their grain.
 
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -17,6 +22,7 @@ use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::{Shader, ShaderRef};
 
 use super::material::{MaterialLibrary, set};
+use super::texture::{FacadeClass, Pane};
 
 const SHADER: &str = "shaders/facade.wgsl";
 
@@ -27,8 +33,21 @@ const SHADER: &str = "shaders/facade.wgsl";
 /// here.
 const GRAIN_TILE: f32 = 2.2;
 
+/// Field order is the shader's, not one chosen for reading: `assets/shaders/
+/// facade.wgsl` declares the same struct, and a uniform is laid out by
+/// declaration order under WGSL's alignment rules. The two vectors lead
+/// because they align to sixteen bytes and would otherwise each open a hole.
 #[derive(Clone, Copy, Debug, ShaderType, Reflect)]
 pub struct FacadeSettings {
+    /// Where the glass sits inside one cell above the ground floor, as
+    /// fractions of that cell: `(u0, u1, v0, v1)`. The shader needs it to know
+    /// where one window ends and the wall beside it starts — see `glaze`.
+    pub pane: Vec4,
+    /// The same for the ground storey, which is a shopfront in most classes
+    /// and therefore a different rectangle.
+    pub ground: Vec4,
+    /// Bays across a building face, and storeys up it.
+    pub grid: Vec2,
     pub tile: f32,
     /// 0 leaves the painted wall alone; 1 lets the scan swing the wall's colour
     /// by its own full contrast. Above that it over-swings — darker than
@@ -42,12 +61,23 @@ pub struct FacadeSettings {
 impl Default for FacadeSettings {
     fn default() -> Self {
         Self {
+            // Overwritten by `for_class`. A grid of ones would make the whole
+            // face one cell, which is wrong rather than merely plain, so the
+            // default is the commonest class instead of a placeholder.
+            pane: rect(FacadeClass::Lowrise.pane(1)),
+            ground: rect(FacadeClass::Lowrise.pane(0)),
+            grid: Vec2::from(FacadeClass::Lowrise.grid()),
             tile: GRAIN_TILE,
             strength: 0.70,
             relief: 0.90,
             swap: 0.0,
         }
     }
+}
+
+/// One pane rectangle as the shader wants it.
+fn rect(pane: Pane) -> Vec4 {
+    Vec4::new(pane.u0, pane.u1, pane.v0, pane.v1)
 }
 
 /// The grain half of a facade material.
@@ -65,6 +95,20 @@ pub struct FacadeGrain {
 
 impl MaterialExtension for FacadeGrain {
     fn fragment_shader() -> ShaderRef {
+        SHADER.into()
+    }
+
+    /// The same file. It branches on `PREPASS_PIPELINE` and writes a g-buffer
+    /// instead of a lit colour — the shape Bevy's own `pbr.wgsl` uses, and the
+    /// reason the grain is computed in one place rather than in two shaders
+    /// that would have to be kept in step by hand.
+    ///
+    /// Without this the extension would fall through to `StandardMaterial`'s
+    /// deferred shader, and every wall in the city would go into the g-buffer
+    /// with its painted texture and none of its scanned grain — which is not a
+    /// crash, and is exactly the kind of silent loss that is hard to spot in a
+    /// screenshot.
+    fn deferred_fragment_shader() -> ShaderRef {
         SHADER.into()
     }
 }
@@ -162,6 +206,24 @@ impl FacadeGrain {
             normal: scanned.map(|s| s.normal.clone()),
         }
     }
+
+    /// Tells the shader which window grid this material's facade was painted
+    /// with.
+    ///
+    /// The grid belongs to the height class and the grain belongs to the
+    /// district, and the material is the product of the two — so this is a
+    /// second step rather than another argument to `for_district`, which would
+    /// otherwise rebuild the same grain once per class.
+    ///
+    /// It has to be the same grid `texture::facade` painted and the same one
+    /// `world::shell` cut the reveals from. All three read
+    /// [`FacadeClass::pane`]; none of them has its own copy of the numbers.
+    pub fn for_class(mut self, class: FacadeClass) -> Self {
+        self.settings.grid = Vec2::from(class.grid());
+        self.settings.pane = rect(class.pane(1));
+        self.settings.ground = rect(class.pane(0));
+        self
+    }
 }
 
 /// Loaded so the shader is compiled before the first building is drawn rather
@@ -177,6 +239,88 @@ pub fn load_shader(mut commands: Commands, asset_server: Res<AssetServer>) {
 mod tests {
     use super::super::citygen::District;
     use super::*;
+
+    /// The window grid reaches the shader through a uniform, the texture
+    /// through a painting function, and the geometry through `world::shell`.
+    /// All three read [`FacadeClass::pane`]; this is the one that checks the
+    /// copy in the uniform still says what the other two were built from. Get
+    /// it wrong and every room in the city sits a bay to one side of its own
+    /// window.
+    #[test]
+    fn the_shader_is_told_the_grid_the_facade_was_painted_with() {
+        for class in FacadeClass::ALL {
+            let settings = FacadeGrain::default().for_class(class).settings;
+            assert_eq!(
+                settings.grid,
+                Vec2::from(class.grid()),
+                "{class:?} is drawn on a different grid than it is painted on"
+            );
+            assert_eq!(settings.pane, rect(class.pane(1)), "{class:?}, upstairs");
+            assert_eq!(
+                settings.ground,
+                rect(class.pane(0)),
+                "{class:?}, ground floor"
+            );
+        }
+    }
+
+    /// A pane rectangle that runs backwards, or off its own cell, would put the
+    /// room behind the wall instead of behind the glass — and because the
+    /// shader divides by the rectangle's width, a zero-width one takes a whole
+    /// facade with it.
+    #[test]
+    fn every_pane_is_a_rectangle_with_wall_left_around_it() {
+        for class in FacadeClass::ALL {
+            for row in [0, 1] {
+                let pane = rect(class.pane(row));
+                let (u0, u1, v0, v1) = (pane.x, pane.y, pane.z, pane.w);
+                assert!(
+                    0.0 < u0 && u0 < u1 && u1 < 1.0,
+                    "{class:?} row {row} spans {u0}..{u1} across its cell"
+                );
+                assert!(
+                    0.0 < v0 && v0 < v1 && v1 < 1.0,
+                    "{class:?} row {row} spans {v0}..{v1} up its cell"
+                );
+            }
+        }
+    }
+
+    /// The ground storey is the one a pedestrian looks into, and it is a
+    /// shopfront rather than a window everywhere but on a house. The shader
+    /// carries two rectangles precisely so that it can be — if they came out
+    /// equal, the second uniform would be dead weight.
+    #[test]
+    fn a_shopfront_is_not_the_window_above_it() {
+        for class in FacadeClass::ALL {
+            let ground = rect(class.pane(0));
+            let upstairs = rect(class.pane(1));
+            assert_eq!(
+                ground != upstairs,
+                class.has_shopfronts(),
+                "{class:?} has shopfronts: {}, but its ground floor {} the \
+                 storeys above",
+                class.has_shopfronts(),
+                if ground == upstairs {
+                    "matches"
+                } else {
+                    "differs from"
+                }
+            );
+            if class.has_shopfronts() {
+                // Not that it is bigger — a curtain-walled tower glazes edge
+                // to edge and its windows are wider than any shopfront. What
+                // makes a shopfront one is that it comes down to the pavement.
+                assert!(
+                    ground.z < upstairs.z,
+                    "{class:?}'s shopfront starts higher up its cell ({}) than \
+                     the windows above it ({})",
+                    ground.z,
+                    upstairs.z
+                );
+            }
+        }
+    }
 
     const DISTRICTS: [District; 5] = [
         District::Downtown,

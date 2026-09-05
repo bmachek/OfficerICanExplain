@@ -7,6 +7,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::render::quality::GraphicsSettings;
+
 #[derive(Resource, Debug, Clone, Serialize, Deserialize)]
 pub struct GameConfig {
     /// Everything about world layout derives from this. Same seed, same city.
@@ -14,6 +16,10 @@ pub struct GameConfig {
     pub world: WorldConfig,
     pub camera: CameraConfig,
     pub audio: AudioConfig,
+    /// What the renderer is allowed to spend. Resolved from a single quality
+    /// preset and then walked back to what the GPU actually supports; see
+    /// [`crate::render::quality`].
+    pub graphics: GraphicsSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,12 +31,15 @@ pub struct WorldConfig {
     /// Real seconds for a full 24h cycle. 0 freezes the clock.
     pub day_length_seconds: f32,
     pub start_hour: f32,
-    /// How wet the ground is, 0 to 1. Above about a third it also rains.
+    /// How wet the ground is when the world opens, 0 to 1.
     ///
-    /// A dial rather than a simulation: deciding *when* it rains is a separate
-    /// job from being able to show it, and a screenshot needs the weather to
-    /// hold still.
-    pub wetness: f32,
+    /// A starting value rather than a dial. Weather runs on its own from here —
+    /// see [`crate::world::weather::Weather`] for the live values — and it runs
+    /// on the same clock as the sun, so `day_length_seconds` at zero holds the
+    /// whole sky still. That is what a screenshot needs.
+    pub start_wetness: f32,
+    /// And how much of the sky is under cloud when it opens, 0 to 1.
+    pub start_cover: f32,
 }
 
 /// The mixer. Three numbers rather than one, because the background bed and
@@ -70,7 +79,10 @@ impl Default for GameConfig {
                 stream_radius: 900.0,
                 day_length_seconds: 600.0,
                 start_hour: 9.5,
-                wetness: 0.0,
+                start_wetness: 0.0,
+                // A fair day with a little cloud in it. Where the weather drifts
+                // from here is the seed's business.
+                start_cover: 0.18,
             },
             camera: CameraConfig {
                 speed: 25.0,
@@ -84,6 +96,7 @@ impl Default for GameConfig {
                 effects: 1.0,
                 ambience: 0.5,
             },
+            graphics: GraphicsSettings::default(),
         }
     }
 }

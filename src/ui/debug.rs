@@ -15,9 +15,11 @@ use crate::player::camera::CameraRig;
 use crate::player::input::Action;
 use crate::player::interact::Driving;
 use crate::player::on_foot::Player;
+use crate::render::quality::{AoQuality, Capabilities, QualityPreset};
 use crate::vehicle::controller::VehicleState;
 use crate::vehicle::damage::VehicleHealth;
 use crate::vehicle::spec::VehicleSpec;
+use crate::world::weather::Weather;
 
 pub struct DebugUiPlugin;
 
@@ -31,6 +33,8 @@ impl Plugin for DebugUiPlugin {
 fn tuning_panel(
     mut contexts: EguiContexts,
     mut config: ResMut<GameConfig>,
+    mut weather: ResMut<Weather>,
+    caps: Res<Capabilities>,
     state: Res<State<AppState>>,
     cameras: Query<(&Transform, &CameraRig)>,
     actions: Query<&ActionState<Action>>,
@@ -83,8 +87,10 @@ fn tuning_panel(
             ui.add(egui::Slider::new(&mut config.audio.ambience, 0.0..=1.5).text("ambience"));
 
             ui.separator();
-            ui.label(egui::RichText::new("weather").strong());
-            ui.add(egui::Slider::new(&mut config.world.wetness, 0.0..=1.0).text("wetness"));
+            weather_section(ui, &mut weather, &mut config);
+
+            ui.separator();
+            graphics_section(ui, &mut config, &caps);
 
             ui.separator();
             ui.label(egui::RichText::new("input").strong());
@@ -112,6 +118,97 @@ fn tuning_panel(
         });
 
     Ok(())
+}
+
+/// The live sky, and a way to take it over.
+///
+/// Weather runs itself now, which is exactly what makes a panel necessary: the
+/// interesting states — a front rolling in, a road drying out — take game hours
+/// to arrive on their own, and nobody tuning the look of rain is going to wait
+/// for it. Dragging a slider is an override, so the sliders read back the
+/// simulation until they are touched and the simulation carries on from
+/// wherever they were left.
+fn weather_section(ui: &mut egui::Ui, weather: &mut Weather, config: &mut GameConfig) {
+    ui.label(egui::RichText::new("weather").strong());
+    ui.add(egui::Slider::new(&mut weather.cover, 0.0..=1.0).text("cloud"));
+    ui.add(egui::Slider::new(&mut weather.wetness, 0.0..=1.0).text("wetness"));
+    ui.label(format!(
+        "rain {:.2}   wind {:.1} m/s   hour {:+.1}",
+        weather.rain,
+        weather.wind_speed(),
+        weather.elapsed,
+    ));
+    // The one control that is not an override: with the clock stopped, nothing
+    // above moves on its own, and that is how a screenshot holds still.
+    ui.add(
+        egui::Slider::new(&mut config.world.day_length_seconds, 0.0..=1800.0)
+            .text("day length (s)"),
+    );
+}
+
+/// Renderer tier, and what it resolved to.
+///
+/// Picking a preset re-derives the whole block, which is the point: these
+/// settings are meant to be compared as coherent tiers rather than mixed by
+/// hand. The individual toggles below it are still editable, because judging
+/// whether one effect is worth its cost means being able to turn exactly that
+/// one off — but they are shown as what they are, a deviation from the preset.
+fn graphics_section(ui: &mut egui::Ui, config: &mut GameConfig, caps: &Capabilities) {
+    ui.label(egui::RichText::new("graphics").strong());
+
+    let requested = config.graphics.requested;
+    let mut chosen = requested;
+    egui::ComboBox::from_label("preset")
+        .selected_text(requested.name())
+        .show_ui(ui, |ui| {
+            for preset in QualityPreset::ALL {
+                ui.selectable_value(&mut chosen, preset, preset.name());
+            }
+        });
+    if chosen != requested {
+        // Straight back through the same downgrade the startup probe ran, so a
+        // preset picked here can never ask for more than the GPU has.
+        config.graphics = chosen.settings().downgrade(*caps);
+    }
+
+    if !caps.raytracing {
+        ui.label(
+            egui::RichText::new("no ray query on this GPU — raytracing tiers fall back")
+                .small()
+                .weak(),
+        );
+    }
+
+    let g = &mut config.graphics;
+    ui.checkbox(&mut g.contact_shadows, "contact shadows");
+    ui.checkbox(&mut g.soft_shadows, "soft shadows (PCSS)");
+    ui.checkbox(&mut g.ssr, "screen-space reflections");
+    ui.checkbox(&mut g.motion_blur, "motion blur");
+    ui.checkbox(&mut g.depth_of_field, "depth of field");
+
+    let mut ao_on = g.ssao.is_some();
+    if ui.checkbox(&mut ao_on, "ambient occlusion").changed() {
+        g.ssao = ao_on.then_some(AoQuality::High);
+    }
+
+    ui.add(
+        egui::Slider::new(&mut g.shadow_distance, 100.0..=2000.0)
+            .text("shadow distance")
+            .suffix(" m"),
+    );
+    // Read once, when a chunk spawns, and baked into the visibility ranges of
+    // everything in it. Moving this changes what the *next* chunk to stream in
+    // does; walk out of a chunk and back into it to see it applied here.
+    ui.add(egui::Slider::new(&mut g.lod_scale, 0.25..=3.0).text("lod scale"));
+
+    ui.label(
+        egui::RichText::new(format!(
+            "volumetrics {:?} · upscaling {:?} · {}x shadow map",
+            g.volumetrics, g.upscaling, g.shadow_map_size,
+        ))
+        .small()
+        .weak(),
+    );
 }
 
 /// Live handling tuning for whatever the player is driving.
