@@ -177,9 +177,11 @@ fn patch() -> Image {
             * smoothstep01((0.455 - (v - 0.5).abs() + ragged) / 0.04);
 
         let grit = fbm(u, v, 22, 3, 19);
-        // The tar seam is blacker than the patch, and the patch is blacker than
-        // the road it was cut into.
-        let value = 0.24 + grit * 0.10 - (seal - inside) * 0.14;
+        // Blacker than the road, and by a long way. A repair is asphalt that
+        // has not had ten years of tyres polishing the aggregate pale, and at
+        // the value the road itself is painted it is a rectangle nobody can
+        // see. The tar seam around it is blacker still.
+        let value = 0.145 + grit * 0.055 - (seal - inside) * 0.075;
         let c = byte(value);
         [c, c, byte(value * 1.02), byte(seal * margin(u, v))]
     })

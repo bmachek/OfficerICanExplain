@@ -42,6 +42,10 @@ FRAMINGS=(
     "overcast|--at-node 300 --eye 1.7 --hour 13 --cover 1"
     "facade|--at -163.0,4.5,-759.5 --look -172.6,6.6,-759.5 --hour 15"
     "park|--at 522,1.8,-986 --look 610,7,-902 --hour 9"
+    # Down onto the carriageway from a first-floor window. The only framing
+    # that shows the road *surface*: from head height a decal is four pixels
+    # tall and every one of them is on the horizon.
+    "wear|--at -163.6,12,-744.3 --look -138.9,0,-740.8 --hour 11"
     "cars|--at-car --hour 11"
     "damage|--at-car --damage 0.45 --hour 11"
     "showroom|--showroom --hour 11"
