@@ -222,8 +222,9 @@ impl Shell {
             .extend([base, base + 1, base + 2, base + 2, base + 3, base]);
     }
 
-    /// A rectangle parallel to the wall, `depth` in from it.
-    fn panel(&mut self, face: Face, u: Span, v: Span, depth: f32) {
+    /// A rectangle parallel to the wall, `depth` in from it, taking its colour
+    /// from a band of facade that need not be the one it stands in front of.
+    fn band(&mut self, face: Face, u: Span, v: Span, depth: f32, texture_v: Span) {
         self.quad(
             [
                 face.at(u.0, v.0, depth),
@@ -231,9 +232,19 @@ impl Shell {
                 face.at(u.1, v.1, depth),
                 face.at(u.0, v.1, depth),
             ],
-            [uv(u.0, v.0), uv(u.1, v.0), uv(u.1, v.1), uv(u.0, v.1)],
+            [
+                uv(u.0, texture_v.0),
+                uv(u.1, texture_v.0),
+                uv(u.1, texture_v.1),
+                uv(u.0, texture_v.1),
+            ],
             face.out(),
         );
+    }
+
+    /// A rectangle lying in the wall, coloured by where it lies.
+    fn panel(&mut self, face: Face, u: Span, v: Span, depth: f32) {
+        self.band(face, u, v, depth, v);
     }
 
     /// A vertical strip at one `u`, running from one depth to another: the side
@@ -284,18 +295,55 @@ impl Shell {
     /// A box standing proud of one wall: a balcony slab, its parapet, a sill.
     /// Five faces; the sixth is against the wall and is never seen.
     ///
-    /// Each face takes its colour from *inside* the box's own footprint on the
-    /// wall. Not for the look of it — a sill is twelve centimetres and could
-    /// take any wall colour — but because a zero-area rectangle in UV space is
-    /// a degenerate triangle to mikktspace, and a degenerate triangle is where
-    /// a tangent basis comes back as zero and the normal map goes black.
-    fn proud(&mut self, face: Face, u: Span, v: Span, out: f32) {
-        let (across, up) = ((u.1 - u.0) * 0.5, (v.1 - v.0) * 0.5);
-        self.panel(face, u, v, -out);
-        self.soffit(face, u, v.1, (-out, 0.0), (v.1, v.1 - up), 1.0);
-        self.soffit(face, u, v.0, (-out, 0.0), (v.0, v.0 + up), -1.0);
-        self.jamb(face, u.0, v, (-out, 0.0), (u.0, u.0 + across), -1.0);
-        self.jamb(face, u.1, v, (-out, 0.0), (u.1, u.1 - across), 1.0);
+    /// Every one of them is coloured from `masonry` — a rectangle of facade
+    /// that is known to be wall — rather than from where it happens to stand.
+    /// A balcony parapet hangs in front of the glass, and sampled by position
+    /// it comes out painted with a window: a second pane, floating in front of
+    /// the real one and displaced from it by its own parallax, which looks
+    /// exactly as strange as it sounds.
+    ///
+    /// It also settles the other half of the problem for nothing. One texture
+    /// column is a zero-area rectangle in UV space, and a zero-area UV triangle
+    /// is where mikktspace hands back a tangent basis of nothing and the normal
+    /// map goes black; a rectangle of wall has area on both axes by definition.
+    fn proud(&mut self, face: Face, u: Span, v: Span, out: f32, masonry: (Span, Span)) {
+        let ((tu0, tu1), (tv0, tv1)) = masonry;
+        let colour = [uv(tu0, tv0), uv(tu1, tv0), uv(tu1, tv1), uv(tu0, tv1)];
+
+        self.quad(
+            [
+                face.at(u.0, v.0, -out),
+                face.at(u.1, v.0, -out),
+                face.at(u.1, v.1, -out),
+                face.at(u.0, v.1, -out),
+            ],
+            colour,
+            face.out(),
+        );
+        for (at, up) in [(v.1, 1.0f32), (v.0, -1.0)] {
+            self.quad(
+                [
+                    face.at(u.0, at, -out),
+                    face.at(u.1, at, -out),
+                    face.at(u.1, at, 0.0),
+                    face.at(u.0, at, 0.0),
+                ],
+                colour,
+                Vec3::Y * up,
+            );
+        }
+        for (at, side) in [(u.0, -1.0f32), (u.1, 1.0)] {
+            self.quad(
+                [
+                    face.at(at, v.0, -out),
+                    face.at(at, v.0, 0.0),
+                    face.at(at, v.1, 0.0),
+                    face.at(at, v.1, -out),
+                ],
+                colour,
+                face.along() * side,
+            );
+        }
     }
 
     /// A course wrapping the whole building at height `v`, standing `out`
@@ -311,16 +359,20 @@ impl Shell {
     ///   have to be split the way a picture frame is — two sides long, two
     ///   short — or the corners are covered twice and fight for the depth
     ///   buffer.
-    fn course(&mut self, v: Span, out: f32) {
+    ///
+    /// `masonry` is the band of facade it is coloured from. A storey course sits
+    /// on a floor line and can take the wall it stands on; a cornice is deeper
+    /// than the gap above the top row of windows and would otherwise come out
+    /// with a strip of glass along its underside.
+    fn course(&mut self, v: Span, out: f32, masonry: Span) {
         let ring = (-out, 1.0 + out);
-        let up = (v.1 - v.0) * 0.5;
         for face in Face::ALL {
-            self.panel(face, ring, v, -out);
+            self.band(face, ring, v, -out, masonry);
 
             let over = if face.owns_corners() { out } else { 0.0 };
             let frame = (-over, 1.0 + over);
-            self.soffit(face, frame, v.1, (-out, 0.0), (v.1, v.1 - up), 1.0);
-            self.soffit(face, frame, v.0, (-out, 0.0), (v.0, v.0 + up), -1.0);
+            self.soffit(face, frame, v.1, (-out, 0.0), masonry, 1.0);
+            self.soffit(face, frame, v.0, (-out, 0.0), masonry, -1.0);
         }
     }
 
@@ -446,10 +498,15 @@ fn shell(class: FacadeClass, detail: Detail, variant: u32) -> Mesh {
                 mesh.soffit(face, (u0, u1), v1, (0.0, reveal), (v1, v1 + inset.3), -1.0);
                 mesh.panel(face, (u0, u1), (v0, v1), reveal);
 
+                // The spandrel under this window: the nearest patch of wall
+                // that is guaranteed not to be glass, and what everything
+                // standing proud of the facade here is coloured from.
+                let masonry = ((cu0, cu1), (cv0, v0));
+
                 if balcony_at(class, column, row, variant) {
                     let width = (u0 - proud, u1 + proud);
                     let slab = (v0 - BALCONY_SLAB * cell_v, v0);
-                    mesh.proud(face, width, slab, BALCONY_OUT * cell_u);
+                    mesh.proud(face, width, slab, BALCONY_OUT * cell_u, masonry);
 
                     let rail = (slab.1, slab.1 + BALCONY_RAIL * cell_v);
                     let inset = BALCONY_INSET * cell_u;
@@ -458,6 +515,7 @@ fn shell(class: FacadeClass, detail: Detail, variant: u32) -> Mesh {
                         (width.0 + inset, width.1 - inset),
                         rail,
                         (BALCONY_OUT - BALCONY_INSET) * cell_u,
+                        masonry,
                     );
                 } else if !pane.ground {
                     // A sill, which is here for its shadow and nothing else.
@@ -466,6 +524,7 @@ fn shell(class: FacadeClass, detail: Detail, variant: u32) -> Mesh {
                         (u0 - proud, u1 + proud),
                         (v0 - SILL * cell_v, v0),
                         SILL_PROUD * cell_u,
+                        masonry,
                     );
                 }
 
@@ -476,31 +535,36 @@ fn shell(class: FacadeClass, detail: Detail, variant: u32) -> Mesh {
         }
     }
 
-    // The horizontal courses, which both levels of detail carry.
+    // The horizontal courses, which both levels of detail carry. A course sits
+    // on a floor line, which is spandrel either side of it, so it can be
+    // coloured by where it stands.
     if let Some(every) = course_every(class) {
         for row in 1..rows {
             if row % every == 0 {
                 let line = row as f32 * cell_v;
-                mesh.course(
-                    (line - COURSE * cell_v * 0.5, line + COURSE * cell_v * 0.5),
-                    proud,
-                );
+                let band = (line - COURSE * cell_v * 0.5, line + COURSE * cell_v * 0.5);
+                mesh.course(band, proud, band);
             }
         }
     }
 
     // The sign board over the shops, standing proud of the wall the way a board
-    // screwed to one does.
+    // screwed to one does — and coloured, rightly, as the board the texture
+    // already paints there.
     if class.has_shopfronts() {
-        mesh.course(
-            (texture::FASCIA.0 * cell_v, texture::FASCIA.1 * cell_v),
-            FASCIA_PROUD * cell_u,
-        );
+        let fascia = (texture::FASCIA.0 * cell_v, texture::FASCIA.1 * cell_v);
+        mesh.course(fascia, FASCIA_PROUD * cell_u, fascia);
     }
 
     // And the cornice, which is where a wall stops rather than where it is
-    // interrupted, so it runs to the very top.
-    mesh.course((1.0 - CORNICE * cell_v, 1.0), CORNICE_PROUD * cell_u);
+    // interrupted, so it runs to the very top. Deep enough to reach down past
+    // the head of the top row of windows, so it is coloured from the spandrel
+    // under them instead of from the glass it hangs in front of.
+    mesh.course(
+        (1.0 - CORNICE * cell_v, 1.0),
+        CORNICE_PROUD * cell_u,
+        top_masonry(class, cell_v),
+    );
 
     with_tangents(mesh.build())
 }
@@ -544,12 +608,20 @@ fn awning(mesh: &mut Shell, face: Face, cell: Span, cell_v0: f32, size: (f32, f3
             face.at(u.0, low - drop, out),
         ]
     };
-    let coords = |drop: f32| {
+    // Coloured from the sign board above it rather than from where it hangs,
+    // which is across the top of the shop window: an awning painted with a pane
+    // of glass is the same mistake a balcony parapet makes, one storey down.
+    // It is also what a real awning is — the shopfront's own livery.
+    let board = (
+        cell_v0 + texture::FASCIA.0 * cell_v,
+        cell_v0 + texture::FASCIA.1 * cell_v,
+    );
+    let coords = |_: f32| {
         [
-            uv(u.0, high - drop),
-            uv(u.1, high - drop),
-            uv(u.1, low - drop),
-            uv(u.0, low - drop),
+            uv(u.0, board.0),
+            uv(u.1, board.0),
+            uv(u.1, board.1),
+            uv(u.0, board.1),
         ]
     };
     let (top, under) = (rail(0.0), rail(thick));
@@ -561,40 +633,26 @@ fn awning(mesh: &mut Shell, face: Face, cell: Span, cell_v0: f32, size: (f32, f3
 
     mesh.quad(top, coords(0.0), up);
     mesh.quad(under, coords(thick), -up);
-    // The front lip, and the two ends. The ends take their colour from a
-    // quarter of the way across the board, because one texture column is a
-    // degenerate triangle to mikktspace.
-    let across = (u.1 - u.0) * 0.25;
-    mesh.quad(
-        [top[3], top[2], under[2], under[3]],
-        [
-            uv(u.0, low),
-            uv(u.1, low),
-            uv(u.1, low - thick),
-            uv(u.0, low - thick),
-        ],
-        (face.out() - Vec3::Y).normalize(),
-    );
-    mesh.quad(
-        [top[0], top[3], under[3], under[0]],
-        [
-            uv(u.0, high),
-            uv(u.0, low),
-            uv(u.0 + across, low),
-            uv(u.0 + across, high),
-        ],
-        -face.along(),
-    );
-    mesh.quad(
-        [top[1], top[2], under[2], under[1]],
-        [
-            uv(u.1, high),
-            uv(u.1, low),
-            uv(u.1 - across, low),
-            uv(u.1 - across, high),
-        ],
-        face.along(),
-    );
+    // The front lip and the two ends.
+    for (corners, normal) in [
+        (
+            [top[3], top[2], under[2], under[3]],
+            (face.out() - Vec3::Y).normalize(),
+        ),
+        ([top[0], top[3], under[3], under[0]], -face.along()),
+        ([top[1], top[2], under[2], under[1]], face.along()),
+    ] {
+        mesh.quad(corners, coords(0.0), normal);
+    }
+}
+
+/// A band of the top storey that is wall rather than window, for the cornice
+/// hanging over it to take its colour from.
+fn top_masonry(class: FacadeClass, cell_v: f32) -> (f32, f32) {
+    let rows = class.grid().1;
+    let top = rows - 1.0;
+    let pane = class.pane(top as u32);
+    ((top * cell_v), (top + pane.v0) * cell_v)
 }
 
 // ------------------------------------------------------------------ kit ----
@@ -847,6 +905,58 @@ mod tests {
                             "{class:?}: a ray escapes the cornice at {from} along {direction}"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    /// Nothing that stands proud of the wall may be painted with a window.
+    ///
+    /// The failure this catches is not subtle once you have seen it and is
+    /// invisible until you do: a balcony parapet hangs across the lower half of
+    /// its own window, so sampled by position it comes out glazed — a second
+    /// pane floating half a metre in front of the real one and displaced from
+    /// it by its own parallax. The awning over a shopfront and the underside of
+    /// the cornice both reach across glass the same way.
+    #[test]
+    fn nothing_standing_proud_of_the_wall_is_painted_with_a_window() {
+        for class in FacadeClass::ALL {
+            let (columns, rows) = class.grid();
+            for variant in 0..VARIANTS {
+                let mesh = shell(class, Detail::Full, variant);
+                let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0).unwrap() {
+                    bevy::render::mesh::VertexAttributeValues::Float32x2(uv) => uv.clone(),
+                    _ => panic!("unexpected uv format"),
+                };
+                let Some(Indices::U32(indices)) = mesh.indices() else {
+                    panic!("expected u32 indices")
+                };
+
+                for (corner, positions) in indices.as_chunks::<3>().0.iter().zip(triangles(&mesh)) {
+                    // Anything reaching outside the unit cube stands proud of
+                    // the wall rather than lying in it or behind it.
+                    let out = positions
+                        .iter()
+                        .any(|p| p.x.abs() > 0.5 + 1e-4 || p.z.abs() > 0.5 + 1e-4);
+                    if !out {
+                        continue;
+                    }
+
+                    let centre = corner
+                        .iter()
+                        .map(|&v| Vec2::from(uvs[v as usize]))
+                        .sum::<Vec2>()
+                        / 3.0;
+                    let (su, sv) = (centre.x * columns, centre.y * rows);
+                    let (column, row) = (su.floor(), sv.floor());
+                    let pane = class.pane(row.max(0.0) as u32);
+                    let (fu, fv) = (su - column, sv - row);
+
+                    assert!(
+                        fu <= pane.u0 || fu >= pane.u1 || fv <= pane.v0 || fv >= pane.v1,
+                        "{class:?}/{variant}: something standing proud of the wall takes \
+                         its colour from {centre}, which is inside the glass"
+                    );
                 }
             }
         }

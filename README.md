@@ -107,7 +107,7 @@ cargo run --features raytracing
 ## Development
 
 ```sh
-cargo test                                  # 256 tests
+cargo test                                  # 258 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -264,6 +264,14 @@ baked into it comes out multiplied by whatever that building happens to measure.
 A twelve-centimetre reveal on a house would be half a metre on a tower.
 Expressed as a fraction of a bay it survives the scaling, because a bay is
 scaled by the same number.
+
+Anything standing proud of the wall — a sill, a balcony, an awning, the
+underside of the cornice — is coloured from a rectangle of facade that is known
+to be masonry, not from where it happens to stand. A balcony parapet hangs
+across the lower half of its own window, and sampled by position it comes out
+glazed: a second pane floating half a metre in front of the real one and
+displaced from it by its own parallax. The awning gets the shopfront's sign
+board, which is what a real one carries anyway.
 
 Sixteen meshes cover the city: four height classes, two levels of detail, two
 variants. Two variants rather than one because a residential street is a row of

@@ -132,9 +132,9 @@ impl Species {
             (Vec3::new(0.5, 0.6, 0.4), 1.5),
         ];
         const POPLAR: [(Vec3, f32); 3] = [
-            (Vec3::new(0.0, 1.6, 0.0), 1.2),
-            (Vec3::new(0.0, 3.5, 0.0), 1.0),
-            (Vec3::new(0.0, 5.2, 0.0), 0.7),
+            (Vec3::new(0.0, 1.5, 0.0), 1.30),
+            (Vec3::new(0.0, 3.0, 0.0), 1.10),
+            (Vec3::new(0.0, 4.3, 0.0), 0.85),
         ];
         const CHERRY: [(Vec3, f32); 2] = [
             (Vec3::new(0.0, 1.0, 0.0), 1.4),
@@ -647,6 +647,29 @@ mod tests {
     /// cantilever stiffness rather than against trunk thickness is that a
     /// poplar has a thicker trunk than a cherry and still bends further,
     /// because it is twice the height.
+    /// A crown is one merged mesh, and two blobs that do not reach one another
+    /// are two blobs. The columnar species is where this goes wrong — its
+    /// crown is a stack rather than a cluster, so every gap in it is a gap you
+    /// can see the sky through, and the tree reads as a snowman.
+    #[test]
+    fn a_crown_is_one_shape_rather_than_a_stack_of_balls() {
+        for species in Species::ALL {
+            let blobs = species.crown();
+            for (i, (centre, radius)) in blobs.iter().enumerate().skip(1) {
+                // Every blob has to reach into at least one of the ones before
+                // it, by enough that the join is a neck and not a tangent.
+                let joined = blobs[..i].iter().any(|(other, other_radius)| {
+                    let gap = centre.distance(*other);
+                    gap < (radius + other_radius) * 0.82
+                });
+                assert!(
+                    joined,
+                    "{species:?} blob {i} at {centre} does not reach the rest of its crown"
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_stiffer_tree_is_the_one_that_gives_less() {
         let mut by_stiffness = Species::ALL;
