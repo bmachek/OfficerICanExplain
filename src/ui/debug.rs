@@ -104,7 +104,7 @@ fn tuning_panel(
             ui.separator();
             ui.label(
                 egui::RichText::new(
-                    "WASD move · Shift sprint · Space jump · F1 free cam (RMB look)",
+                    "WASD move · Shift sprint · Space jump · RMB aim · F1 free cam (RMB look)",
                 )
                 .small()
                 .weak(),

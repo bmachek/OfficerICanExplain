@@ -43,6 +43,7 @@ just looks worse. Nothing is checked in and nothing is required to build.
 | **Space** | Jump on foot, handbrake in a car |
 | **F** | Enter / exit vehicle |
 | **Left mouse** | Fire |
+| **Right mouse** | Aim — raises the crosshair, which turns red on anything that can be hurt |
 | **M** | Full-screen map |
 | **F1** | Free-fly debug camera (hold right mouse to look) |
 | **F5 / F9** | Quick save / quick load |
@@ -52,7 +53,7 @@ behind a car, gently on foot, and never while you are aiming or already
 steering the view yourself. Both rates are on the dev panel.
 
 Gamepad is mapped throughout: left stick moves, right stick looks, A jumps,
-Y interacts, right trigger fires, B is the handbrake.
+Y interacts, right trigger fires, left trigger aims, B is the handbrake.
 
 ## The loop
 
@@ -76,7 +77,7 @@ left on the tarmac for a second and a half.
 | `crime` | Crime kinds, witnesses, the wanted level |
 | `combat` | Health, armour, hitscan weapons, being run over |
 | `mission` | Objective state machine, mission chain, money |
-| `ui` | HUD, minimap, dev tuning panel |
+| `ui` | HUD, minimap, crosshair, dev tuning panel |
 | `save` | RON quick save / load |
 | `render` | Atmosphere, exposure, bloom, ambient occlusion, anti-aliasing |
 | `audio` | Sound synthesis, the sound bank, and what triggers what |
@@ -87,7 +88,7 @@ only what cannot be derived: position, money, health, heat and mission progress.
 ## Development
 
 ```sh
-cargo test                                  # 87 tests
+cargo test                                  # 181 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
