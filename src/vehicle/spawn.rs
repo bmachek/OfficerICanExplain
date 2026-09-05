@@ -40,11 +40,16 @@ pub struct AlwaysSimulated;
 #[derive(Component)]
 pub struct WheelVisual(pub usize);
 
-/// The three lofts for one archetype, as loaded meshes.
+/// One archetype's bodywork, as loaded meshes.
 struct BodyHandles {
     shell: Handle<Mesh>,
     lower: Handle<Mesh>,
+    /// The glazing. `None` on a van, which has none of its own.
     cabin: Option<Handle<Mesh>>,
+    /// The pressings over the glazing: roof, headers, pillars.
+    frame: Option<Handle<Mesh>>,
+    /// Glazing lying on the shell, which is how a van gets a windscreen.
+    windows: Option<Handle<Mesh>>,
 }
 
 #[derive(Resource)]
@@ -57,6 +62,10 @@ pub struct VehicleAssets {
     tyre: Handle<StandardMaterial>,
     rim: Handle<StandardMaterial>,
     glass: Handle<StandardMaterial>,
+    /// A van's glazing, which cannot be seen through because there is nothing
+    /// behind it but the outside of the box it is lying on.
+    dark_glass: Handle<StandardMaterial>,
+    trim: super::trim::TrimKit,
 }
 
 impl VehicleAssets {
@@ -71,6 +80,13 @@ impl VehicleAssets {
 
 /// Fraction of its own radius that a tyre is wide.
 const TYRE_WIDTH: f32 = 0.66;
+
+/// How far inside the glass the cabin liner sits.
+///
+/// A centimetre and a half on a saloon. Enough that the two surfaces cannot
+/// fight over the depth buffer, small enough that the liner does not read as a
+/// second, smaller car parked inside the first.
+const GLASS_GAP: f32 = 0.985;
 
 pub fn build_assets(
     meshes: &mut Assets<Mesh>,
@@ -90,6 +106,8 @@ pub fn build_assets(
                     shell: add(built.shell),
                     lower: add(built.lower),
                     cabin: built.cabin.map(&mut add),
+                    frame: built.frame.map(&mut add),
+                    windows: built.windows.map(&mut add),
                 },
             )
         })
@@ -119,12 +137,41 @@ pub fn build_assets(
             metallic: 1.0,
             ..default()
         }),
-        glass: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.14, 0.17, 0.22),
-            perceptual_roughness: 0.25,
-            metallic: 0.4,
-            ..default()
+        glass: materials.add(glazing(0.52)),
+        // Opaque, and the alpha is the only difference: a van's windscreen is
+        // lying on the front of the box rather than set into a hole in it, so
+        // what is behind it is not a cab but the outside of the bodywork.
+        dark_glass: materials.add(StandardMaterial {
+            alpha_mode: AlphaMode::Opaque,
+            ..glazing(1.0)
         }),
+        trim: super::trim::build_kit(meshes, materials),
+    }
+}
+
+/// Automotive glass.
+///
+/// Not metal, which is what it used to be here. Glass is a dielectric: at
+/// normal incidence four percent of the light bounces and the rest goes
+/// through, and at a grazing angle almost all of it bounces. That is what makes
+/// a windscreen show the cabin from in front and the sky from the side, and it
+/// is exactly what `metallic` destroys — a metal *tints* its reflection with
+/// its base colour instead of letting anything past it, so a dark blue metal
+/// greenhouse is a dark blue mirror at every angle and a lump at all of them.
+fn glazing(alpha: f32) -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgba(0.038, 0.044, 0.052, alpha),
+        // Blended rather than transmissive on purpose. Refraction through a
+        // five-millimetre pane at a windscreen's rake displaces the ray behind
+        // it by under two millimetres, which is well under a pixel at any
+        // distance a car is ever seen from here; what actually reads as glass
+        // is the Fresnel and the cabin behind it, and both of those are cheaper
+        // this way than in a transmissive pass with its own copy of the screen.
+        alpha_mode: AlphaMode::Blend,
+        perceptual_roughness: 0.055,
+        metallic: 0.0,
+        reflectance: 0.5,
+        ..default()
     }
 }
 
@@ -154,7 +201,11 @@ pub fn spawn_vehicle(
     let anchors = spec.wheel_anchors();
     let wheel_radius = spec.wheel_radius;
     let name = spec.display_name;
-    let body = assets.body(spec.class);
+    let class = spec.class;
+    let body = assets.body(class);
+    // The fittings are placed from the spec, and the spec is moved onto the
+    // vehicle before the children are spawned.
+    let fitted = spec.clone();
 
     let mut entity = commands.spawn((
         Name::new(name),
@@ -199,7 +250,38 @@ pub fn spawn_vehicle(
                 MeshMaterial3d(assets.glass.clone()),
                 Transform::IDENTITY,
             ));
+            // The inside, which is the same loft worn inside out. Without it the
+            // near glass is transparent, the far glass is culled, and you see
+            // the street straight through the car.
+            parent.spawn((
+                Mesh3d(cabin.clone()),
+                MeshMaterial3d(assets.trim.liner.clone()),
+                Transform::from_scale(Vec3::splat(GLASS_GAP)),
+                // The greenhouse's shadow is cast by its glass — tinted glass
+                // does cast one, and the glass is the outer surface. The liner
+                // is drawn back-faces-only, so a shadow map filled from it
+                // would record the far wall of the cabin and let the sun in
+                // through the roof.
+                bevy::light::NotShadowCaster,
+            ));
+            super::trim::furnish(parent, &assets.trim, class, &fitted);
         }
+        if let Some(frame) = &body.frame {
+            parent.spawn((
+                super::damage::BodyPanel,
+                Mesh3d(frame.clone()),
+                MeshMaterial3d(paint.clone()),
+                Transform::IDENTITY,
+            ));
+        }
+        if let Some(windows) = &body.windows {
+            parent.spawn((
+                Mesh3d(windows.clone()),
+                MeshMaterial3d(assets.dark_glass.clone()),
+                Transform::IDENTITY,
+            ));
+        }
+        super::trim::fit(parent, &assets.trim, class, &fitted, &paint);
 
         for (index, anchor) in anchors.iter().enumerate().take(WHEEL_COUNT) {
             // Wheels are built about the X axis at unit radius, so the whole

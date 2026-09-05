@@ -119,33 +119,36 @@ fn lamps_for(
     spec: &VehicleSpec,
 ) {
     let half = spec.half_extents;
-    // Set into the flanks just behind the nose and just ahead of the tail,
-    // rather than pinned to the collider box: the bodywork tucks in at both
-    // ends, and a lamp on the box's corner hangs in the air beside the car.
-    let nose = -half.z * 0.95;
-    let tail = half.z * 0.96;
-    let lamp_y = half.y * 0.06;
-    let lamp_x = half.x * 0.44;
+    // Measured off the profile the bodywork was lofted from, not off the
+    // collider. Pinned to the box, a lamp sat at a height and a width the nose
+    // does not reach at that station and hung in the air beside the car — which
+    // is a thing you only notice once you look at a screenshot, because it
+    // reads as a styling choice until you measure it.
+    let fit = super::trim::Fittings::of(spec.class, spec);
+    let width = fit.lamp_width;
 
     for side in [-1.0f32, 1.0] {
+        // Set half a lamp in from the widest point the nose reaches at this
+        // height, so the outer edge lands on the bodywork rather than past it.
+        let x = side * (fit.lamp_x - width * 0.5);
         parent.spawn((
             Headlight,
             Mesh3d(assets.lens.clone()),
             MeshMaterial3d(assets.dark_glass.clone()),
-            Transform::from_xyz(side * lamp_x, lamp_y, nose).with_scale(Vec3::new(
-                half.x * 0.42,
-                half.y * 0.26,
-                0.06,
+            Transform::from_xyz(x, fit.lamp_y, fit.nose - 0.03).with_scale(Vec3::new(
+                width,
+                half.y * 0.22,
+                0.07,
             )),
         ));
         parent.spawn((
             TailLamp,
             Mesh3d(assets.lens.clone()),
             MeshMaterial3d(assets.dark_lamp.clone()),
-            Transform::from_xyz(side * lamp_x, lamp_y, tail).with_scale(Vec3::new(
-                half.x * 0.36,
-                half.y * 0.22,
-                0.06,
+            Transform::from_xyz(x, fit.lamp_y, fit.tail + 0.03).with_scale(Vec3::new(
+                width * 0.88,
+                half.y * 0.19,
+                0.07,
             )),
         ));
     }

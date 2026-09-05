@@ -7,6 +7,7 @@ pub mod lights;
 pub mod paint;
 pub mod spawn;
 pub mod spec;
+pub mod trim;
 
 use bevy::prelude::*;
 
