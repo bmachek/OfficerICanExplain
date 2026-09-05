@@ -57,7 +57,8 @@ are dispatched to where the crime was reported and close in on the road
 network. **Heat only falls while no officer can see you** — escaping means
 breaking line of sight and keeping it broken for seven seconds, not waiting out
 a timer. Five stars puts eight cruisers on you, and above one star they stop
-following and start ramming.
+following and start ramming — which on foot means being run over, thrown, and
+left on the tarmac for a second and a half.
 
 ## Layout
 
@@ -69,7 +70,7 @@ following and start ramming.
 | `vehicle` | Arcade vehicle physics, specs, damage, parked-car spawning |
 | `ai` | Traffic, pedestrians, police pursuit, shared steering, walk cycles |
 | `crime` | Crime kinds, witnesses, the wanted level |
-| `combat` | Health, armour, hitscan weapons |
+| `combat` | Health, armour, hitscan weapons, being run over |
 | `mission` | Objective state machine, mission chain, money |
 | `ui` | HUD, minimap, dev tuning panel |
 | `save` | RON quick save / load |
