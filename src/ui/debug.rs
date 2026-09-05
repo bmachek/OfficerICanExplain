@@ -71,6 +71,16 @@ fn tuning_panel(
             );
 
             ui.separator();
+            ui.label(egui::RichText::new("follow camera").strong());
+            ui.add(
+                egui::Slider::new(&mut config.camera.auto_follow, 0.0..=10.0).text("auto swing"),
+            );
+            ui.add(
+                egui::Slider::new(&mut config.camera.auto_follow_delay, 0.0..=3.0)
+                    .text("swing delay s"),
+            );
+
+            ui.separator();
             ui.label(egui::RichText::new("mixer").strong());
             ui.add(egui::Slider::new(&mut config.audio.master, 0.0..=1.0).text("master"));
             ui.add(egui::Slider::new(&mut config.audio.effects, 0.0..=1.5).text("effects"));
@@ -100,7 +110,7 @@ fn tuning_panel(
             ui.separator();
             ui.label(
                 egui::RichText::new(
-                    "WASD move · Shift sprint · Space jump · F1 free cam (RMB look)",
+                    "WASD move · Shift sprint · Space jump · RMB aim · F1 free cam (RMB look)",
                 )
                 .small()
                 .weak(),

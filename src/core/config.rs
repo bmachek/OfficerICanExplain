@@ -60,6 +60,14 @@ pub struct CameraConfig {
     pub speed: f32,
     pub boost_multiplier: f32,
     pub mouse_sensitivity: f32,
+    /// How hard the view swings itself in behind the direction of travel, as
+    /// an exponential rate in reciprocal seconds. 0 turns it off entirely.
+    pub auto_follow: f32,
+    /// Seconds of hands off the mouse before that swing starts. Long enough
+    /// that looking somewhere deliberately is never fought, short enough that
+    /// a corner taken two-handed does not lose the car off the side of the
+    /// screen.
+    pub auto_follow_delay: f32,
 }
 
 impl Default for GameConfig {
@@ -80,6 +88,8 @@ impl Default for GameConfig {
                 speed: 25.0,
                 boost_multiplier: 5.0,
                 mouse_sensitivity: 0.002,
+                auto_follow: 3.0,
+                auto_follow_delay: 0.7,
             },
             audio: AudioConfig {
                 master: 0.7,

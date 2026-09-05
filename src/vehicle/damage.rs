@@ -184,7 +184,7 @@ pub fn explode_wrecked_vehicles(
         for (other, mut forces) in &mut nearby {
             let offset = other.translation - center;
             let distance = offset.length();
-            if distance > BLAST_RADIUS || distance < f32::EPSILON {
+            if !(f32::EPSILON..=BLAST_RADIUS).contains(&distance) {
                 continue;
             }
             let falloff = 1.0 - distance / BLAST_RADIUS;

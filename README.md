@@ -43,12 +43,17 @@ just looks worse. Nothing is checked in and nothing is required to build.
 | **Space** | Jump on foot, handbrake in a car |
 | **F** | Enter / exit vehicle |
 | **Left mouse** | Fire |
+| **Right mouse** | Aim — raises the crosshair, which turns red on anything that can be hurt |
 | **M** | Full-screen map |
 | **F1** | Free-fly debug camera (hold right mouse to look) |
 | **F5 / F9** | Quick save / quick load |
 
+Take your hand off the mouse and the camera swings itself in behind you — hard
+behind a car, gently on foot, and never while you are aiming or already
+steering the view yourself. Both rates are on the dev panel.
+
 Gamepad is mapped throughout: left stick moves, right stick looks, A jumps,
-Y interacts, right trigger fires, B is the handbrake.
+Y interacts, right trigger fires, left trigger aims, B is the handbrake.
 
 ## The loop
 
@@ -57,7 +62,8 @@ are dispatched to where the crime was reported and close in on the road
 network. **Heat only falls while no officer can see you** — escaping means
 breaking line of sight and keeping it broken for seven seconds, not waiting out
 a timer. Five stars puts eight cruisers on you, and above one star they stop
-following and start ramming.
+following and start ramming — which on foot means being run over, thrown, and
+left on the tarmac for a second and a half.
 
 ## Layout
 
@@ -69,9 +75,9 @@ following and start ramming.
 | `vehicle` | Arcade vehicle physics, specs, damage, parked-car spawning |
 | `ai` | Traffic, pedestrians, police pursuit, shared steering, walk cycles |
 | `crime` | Crime kinds, witnesses, the wanted level |
-| `combat` | Health, armour, hitscan weapons |
+| `combat` | Health, armour, hitscan weapons, being run over |
 | `mission` | Objective state machine, mission chain, money |
-| `ui` | HUD, minimap, dev tuning panel |
+| `ui` | HUD, minimap, crosshair, dev tuning panel |
 | `save` | RON quick save / load |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, ambient occlusion, anti-aliasing, volumetrics, grading, the post stack |
 | `audio` | Sound synthesis, the sound bank, and what triggers what |
@@ -107,7 +113,7 @@ cargo run --features raytracing
 ## Development
 
 ```sh
-cargo test                                  # 265 tests
+cargo test                                  # 279 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
