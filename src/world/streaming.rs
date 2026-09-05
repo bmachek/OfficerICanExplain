@@ -147,6 +147,7 @@ pub fn update_streaming(
     foliage: Res<crate::world::vegetation::FoliageKit>,
     roofs: Res<crate::world::rooftop::RoofKit>,
     shells: Res<crate::world::shell::ShellKit>,
+    wear: Res<crate::world::decals::WearKit>,
     mut active: ResMut<ActiveChunks>,
     mut timer: ResMut<StreamTimer>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
@@ -178,6 +179,11 @@ pub fn update_streaming(
         let mut planting = crate::core::rng::stream_for_chunk(
             config.world_seed,
             crate::core::rng::stream::VEGETATION,
+            (chunk.x, chunk.y),
+        );
+        let mut wearing = crate::core::rng::stream_for_chunk(
+            config.world_seed,
+            crate::core::rng::stream::WEAR,
             (chunk.x, chunk.y),
         );
 
@@ -216,6 +222,15 @@ pub fn update_streaming(
                     chunk,
                     foliage_range,
                 );
+                super::decals::spawn_edge(
+                    &mut commands,
+                    &wear,
+                    &mut wearing,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                );
             }
         }
         if let Some(junctions) = index.junctions_in(chunk) {
@@ -240,6 +255,14 @@ pub fn update_streaming(
                     node.pos,
                     &arms,
                     arterial,
+                    chunk,
+                );
+                super::decals::spawn_junction(
+                    &mut commands,
+                    &wear,
+                    &mut wearing,
+                    node.pos,
+                    &arms,
                     chunk,
                 );
             }

@@ -251,7 +251,8 @@ pub fn build_assets(
             // whether it is turned — belongs to the palette slot, so a street
             // of one district is not a street of one photograph.
             let grain = super::facade::FacadeGrain::for_district(library, district, slot);
-            for (base, emissive, surface, normal) in &facades {
+            for (&class, (base, emissive, surface, normal)) in FacadeClass::ALL.iter().zip(&facades)
+            {
                 building.push(facades_out.add(super::facade::FacadeMaterial {
                     base: StandardMaterial {
                         base_color: color,
@@ -265,7 +266,7 @@ pub fn build_assets(
                         metallic: 1.0,
                         ..default()
                     },
-                    extension: grain.clone(),
+                    extension: grain.clone().for_class(class),
                 }));
             }
         }

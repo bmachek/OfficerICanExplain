@@ -118,9 +118,9 @@ impl Species {
     /// The blobs the crown is made of: centre, then radius, both relative to
     /// the top of the trunk.
     ///
-    /// Three offset blobs for a plane tree, three stacked ones for a poplar.
-    /// This is the entire difference between the species as far as anyone
-    /// standing on the pavement can tell.
+    /// Three offset blobs for a plane tree, a close-packed spindle for a
+    /// poplar. This is the entire difference between the species as far as
+    /// anyone standing on the pavement can tell.
     fn crown(self) -> &'static [(Vec3, f32)] {
         const PLANE: [(Vec3, f32); 3] = [
             (Vec3::new(0.0, 1.9, 0.0), 2.5),
@@ -131,10 +131,17 @@ impl Species {
             (Vec3::new(0.0, 1.7, 0.0), 2.1),
             (Vec3::new(0.5, 0.6, 0.4), 1.5),
         ];
-        const POPLAR: [(Vec3, f32); 3] = [
-            (Vec3::new(0.0, 1.5, 0.0), 1.30),
-            (Vec3::new(0.0, 3.0, 0.0), 1.10),
-            (Vec3::new(0.0, 4.3, 0.0), 0.85),
+        // The columnar one needs more blobs than the rest and closer
+        // together, because a stack is only read as one crown while the necks
+        // between its blobs stay wide. Widest a third of the way up, tapering
+        // to a point: the shape of a Lombardy poplar, and nothing like the
+        // three balls that stood here and read as a snowman.
+        const POPLAR: [(Vec3, f32); 5] = [
+            (Vec3::new(0.0, 0.75, 0.0), 1.05),
+            (Vec3::new(0.0, 1.70, 0.0), 1.25),
+            (Vec3::new(0.0, 2.65, 0.0), 1.15),
+            (Vec3::new(0.0, 3.55, 0.0), 0.95),
+            (Vec3::new(0.0, 4.40, 0.0), 0.72),
         ];
         const CHERRY: [(Vec3, f32); 2] = [
             (Vec3::new(0.0, 1.0, 0.0), 1.4),
@@ -647,24 +654,52 @@ mod tests {
     /// cantilever stiffness rather than against trunk thickness is that a
     /// poplar has a thicker trunk than a cherry and still bends further,
     /// because it is twice the height.
-    /// A crown is one merged mesh, and two blobs that do not reach one another
-    /// are two blobs. The columnar species is where this goes wrong — its
-    /// crown is a stack rather than a cluster, so every gap in it is a gap you
-    /// can see the sky through, and the tree reads as a snowman.
+    /// How wide the union of two blobs is where they meet, as a fraction of
+    /// the smaller one. One means no waist at all — the smaller blob's centre
+    /// lies inside the larger, so it reads as a bulge. Zero means they do not
+    /// touch and are two separate balls.
+    ///
+    /// This is the measurement the eye actually makes. Overlap alone does not
+    /// answer it: two blobs can overlap by a third of their radii and still
+    /// join through a neck half their width, which is exactly what a snowman
+    /// is.
+    fn waist(a: (Vec3, f32), b: (Vec3, f32)) -> f32 {
+        let ((centre, radius), (other, other_radius)) = (a, b);
+        let gap = centre.distance(other);
+        if gap >= radius + other_radius {
+            return 0.0;
+        }
+        if gap + radius.min(other_radius) <= radius.max(other_radius) {
+            return 1.0;
+        }
+        // Distance from `centre` to the plane the two spheres cross in, and
+        // from that the radius of the circle they cross in.
+        let along = (gap * gap + radius * radius - other_radius * other_radius) / (2.0 * gap);
+        let neck = (radius * radius - along * along).max(0.0).sqrt();
+        neck / radius.min(other_radius)
+    }
+
+    /// A crown is one merged mesh, and two blobs joined by a thin neck are two
+    /// blobs however much they overlap. The columnar species is where this
+    /// goes wrong — its crown is a stack rather than a cluster, so every waist
+    /// in it is a waist you can see, and the tree reads as a snowman.
     #[test]
     fn a_crown_is_one_shape_rather_than_a_stack_of_balls() {
         for species in Species::ALL {
             let blobs = species.crown();
-            for (i, (centre, radius)) in blobs.iter().enumerate().skip(1) {
-                // Every blob has to reach into at least one of the ones before
-                // it, by enough that the join is a neck and not a tangent.
-                let joined = blobs[..i].iter().any(|(other, other_radius)| {
-                    let gap = centre.distance(*other);
-                    gap < (radius + other_radius) * 0.82
-                });
+            for (i, &blob) in blobs.iter().enumerate().skip(1) {
+                // Every blob has to join at least one of the ones before it
+                // through a neck nearly as wide as the blob itself.
+                let widest = blobs[..i]
+                    .iter()
+                    .map(|&other| waist(blob, other))
+                    .fold(0.0, f32::max);
                 assert!(
-                    joined,
-                    "{species:?} blob {i} at {centre} does not reach the rest of its crown"
+                    widest > 0.9,
+                    "{species:?} blob {i} at {} joins the rest of its crown \
+                     through a neck {:.0}% of its width",
+                    blob.0,
+                    widest * 100.0
                 );
             }
         }

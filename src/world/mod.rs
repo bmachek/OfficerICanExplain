@@ -2,6 +2,7 @@
 
 pub mod buildings;
 pub mod citygen;
+pub mod decals;
 pub mod facade;
 pub mod markings;
 pub mod material;
@@ -57,6 +58,7 @@ fn generate_city(
     mut images: ResMut<Assets<Image>>,
     library: Res<material::MaterialLibrary>,
     mut facades: ResMut<Assets<facade::FacadeMaterial>>,
+    mut wear: ResMut<Assets<bevy::pbr::decal::ForwardDecalMaterial<StandardMaterial>>>,
     mut wet: ResMut<weather::WetSurfaces>,
 ) {
     let started = std::time::Instant::now();
@@ -77,6 +79,7 @@ fn generate_city(
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(rooftop::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(shell::build_assets(&mut meshes));
+    commands.insert_resource(decals::build_assets(&mut images, &mut wear));
     commands.insert_resource(vegetation::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(markings::build_assets(
         &mut meshes,

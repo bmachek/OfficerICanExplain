@@ -28,6 +28,9 @@ pub mod stream {
     /// Street trees and park planting. Its own stream rather than sharing the
     /// props one, so that planting a tree cannot shift which bin lands where.
     pub const VEGETATION: u64 = 10;
+    /// Manholes, patches, stains and rubber. Separate again, for the same
+    /// reason: a street's wear must not depend on how many trees are on it.
+    pub const WEAR: u64 = 11;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

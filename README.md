@@ -64,7 +64,7 @@ following and start ramming.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, tunables, deterministic RNG, screenshot tool |
-| `world` | City generator, road graph, chunk streaming, day/night, weather, lights, facade shells and level of detail, trees, street furniture, roofs, wet roads |
+| `world` | City generator, road graph, chunk streaming, day/night, weather, lights, facade shells and level of detail, window interiors, trees, street furniture, roofs, road wear, wet roads |
 | `player` | Input mapping, character controller, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, damage, parked-car spawning |
 | `ai` | Traffic, pedestrians, police pursuit, shared steering, walk cycles |
@@ -107,7 +107,7 @@ cargo run --features raytracing
 ## Development
 
 ```sh
-cargo test                                  # 258 tests
+cargo test                                  # 265 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -301,6 +301,87 @@ sixty-degree field a pixel subtends about four ten-thousandths of a radian, so a
 two-hundred-millimetre reveal is one pixel wide at five hundred metres and less
 than one beyond it. Photo mode is entitled never to drop detail it could see;
 that is where it stops being the same sentence.
+
+## Windows
+
+Geometry got the reveal right and left the pane wrong. A window was a flat
+colour behind a frame, and a flat colour is the one thing a window is not: what
+says *room* is that whatever is behind the glass moves against the frame as you
+walk past, and stops when you stop.
+
+So the facade shader follows the view ray into a box behind the glass and shades
+whichever of its five surfaces the ray lands on — interior mapping, which is
+parallax mapping with a room instead of a height field. No geometry behind the
+pane, no second draw, no texture: one ray against six planes, on the fragments
+the metallic channel already marks as glass.
+
+Two things it needs to know and had no way to:
+
+* **Where the pane sits in its cell.** It is handed the same `FacadeClass::pane`
+  rectangle that `world::texture` painted the glass from and `world::shell` cut
+  the reveal from — a third reader of the one description of the window grid,
+  rather than a third copy of the numbers.
+* **How big the pane is in metres.** One material is shared by every building in
+  a district and no two of them are the same size, so nothing in the material
+  knows. It is recovered per fragment instead: a wall is planar, so its world
+  position is an affine function of its UV, and the screen-space derivatives of
+  the two are a two-by-two system whose solution is how many metres a whole
+  building face measures. A shopfront then gets a shop-sized room and a bathroom
+  window a bathroom-sized one, out of the same uniform.
+
+A third of them have blinds down, which is the cheapest variety there is: a room
+you cannot see into still reads as a room, and it reads as a different one from
+the room next to it.
+
+The glass stopped being a metal to pay for this. It was one — `metallic 0.55` —
+because a metal reflects, and reflecting was the only way to get anything at all
+into a window. With a room behind it that trade runs backwards: a metal's base
+colour tints its reflection instead of showing through it, so the room would
+have come out as a coloured mirror. As a dielectric the glass shows the room
+straight on and still mirrors the street at a glancing angle, which is the angle
+a window actually reflects anything at.
+
+Lit windows keep the parallax after dark, because the emissive is scaled by the
+same surface the ray landed on: a lit room's back wall is brighter than its side
+walls, and the two slide against each other as the camera moves.
+
+## Wear
+
+The asphalt is one plane two kilometres across, and its texture is painted
+before the street layout exists — so nothing in it can know where a junction is,
+where cars stop, or which way the water runs. Manholes, gullies, repairs, oil,
+cracks and rubber are laid on top of it afterwards, as forward decals: a quad
+that reads the depth prepass, finds the surface actually underneath it, and
+projects itself onto that.
+
+That is the difference between `world::decals` and `world::markings` next door,
+and the reason they are not the same code. A road marking is an alpha-masked
+quad floating a centimetre and a half above the asphalt, and it gets away with
+that because paint really is a flat sheet lying on top of a road. A manhole
+cover is not: it sits *in* a surface that falls away towards its gutters.
+
+The wear is in the placement rather than in the images:
+
+| | Where |
+|---|---|
+| Manholes | one line down each street, at the spacing an access chamber is built at |
+| Gullies | in the gutter, against both kerbs |
+| Patches, cracks, stains | counted per hundred metres, scattered across the carriageway |
+| Rubber | on the approach to a junction, in the lane the traffic drives in |
+| Oil | where a car waits at that junction |
+
+Two things it costs. A decal draws with its depth test off — that is what lets
+it paint a surface that is not exactly where its own quad is — so the only thing
+keeping a stain off the roof of the car parked over it is the distance over
+which it fades out, which is thirty centimetres. And decals are blended, so they
+are sorted, unlike everything else in the city.
+
+The failure this technique is prone to is invisible from head height. The
+projection pushes a decal's UV outside its own image as the view flattens, and
+the sampler clamps rather than wraps, so whatever is in the edge texel gets
+dragged across the road for as far as the projection reaches. Every decal is
+painted with an exactly transparent border, and a test reads the pixels back to
+say so — "nearly zero" is a smear that is nearly there.
 
 ## Trees
 
@@ -585,11 +666,12 @@ pursuit, and everything but the player's own car is positioned in the world.
   a windy day. A real one needs the pattern projected into the light, not a
   multiplier on it.
 
-- There are no discrete god rays, because there is nothing yet to cast them. The
-  air lights up towards a low sun and goes dark away from it, which is the
-  physics working; a *shaft* additionally needs a hard-edged gap in an occluder,
-  and a city of extruded boxes on a grid has very few. Cornices, balconies,
-  street trees and railings are what turn the glow into rays — which is Phase 4.
+- God rays are still soft. The air lights up towards a low sun and goes dark
+  away from it, which is the physics working; a *shaft* additionally needs a
+  hard-edged gap in an occluder. There are cornices, balconies and street trees
+  to cast them now, where before there was nothing but boxes on a grid — but the
+  fog is sampled too coarsely to resolve a gap the width of a balcony, so what
+  comes out is a brighter haze rather than a beam.
 
 - The volumetric fog is one box that follows the camera, so from far enough away
   the air stops. Anything past it is hazed by the atmosphere's aerial
@@ -625,6 +707,12 @@ pursuit, and everything but the player's own car is positioned in the world.
 - Traffic signals are unlit and nothing obeys them. A crossroads showing green
   down every arm at once would be a clearer lie than one showing nothing.
 
+- Every room behind a window is the same shape: an empty box as deep as its own
+  window is wide. It is the silhouette of the opening that varies, not what is
+  in the room, so a shopfront and a bedroom differ in size and colour and in
+  nothing else. Furniture would need a second box test per fragment and a reason
+  to believe anybody would look.
+
 - Screen-space reflections can only reflect what is on screen. A car just out of
   frame stops appearing in the road under it. Light probes do not have that
   problem and cannot reflect anything that moves; the two are complementary and
@@ -637,7 +725,20 @@ pursuit, and everything but the player's own car is positioned in the world.
 - Facades are procedural, so walls read as materials rather than photographs.
   Scanning them needs a custom material with a detail UV; see above.
 - Six wall sets across five districts, so a long enough walk repeats. What
-  breaks the repeat is combination, not count — see above.
+  breaks the repeat is combination, not count — see above. More sets is the
+  obvious fix and is not done, because ambientCG is not reachable from where
+  this was built; adding set names that cannot be fetched would put a manifest
+  in the tree that nobody has ever seen resolve.
+
+- Parallax mapping is deliberately not wired, though the displacement maps are
+  downloaded. It was measured rather than skipped: on the pavement the joints
+  are twelve millimetres across a two-and-a-half-metre texture repeat, so the
+  offset is under half a percent of one and invisible next to what the normal
+  map already does. On a facade the depth map would displace the very UV the
+  window grid is painted in, and a reveal would arrive with its window sliding
+  out of its own hole — that surface got real geometry instead. The one place
+  the technique genuinely pays here is behind the glass, and that is what
+  `glaze` is.
 - Damage does not change how a car collides: dents move metal, never the box
   the physics uses. Rebuilding a convex hull per impact is the alternative.
 
