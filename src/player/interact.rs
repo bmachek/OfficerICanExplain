@@ -11,7 +11,6 @@ use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 
 use crate::core::schedule::GameSet;
-use crate::crime::events::{CrimeKind, CrimeReported};
 
 use crate::player::input::Action;
 use crate::player::on_foot::{CAPSULE_LENGTH, CAPSULE_RADIUS, Player};
@@ -82,7 +81,6 @@ impl Plugin for InteractPlugin {
             Update,
             (
                 enter_or_exit_vehicle,
-                report_vehicle_theft,
                 eject_from_wrecked_vehicle,
                 carry_driver,
                 drive_from_input,
@@ -195,24 +193,6 @@ fn drive_from_input(
     input.steer = movement.x;
     // Space is jump on foot and handbrake in a car; context decides which.
     input.handbrake = action_state.pressed(&Action::Handbrake);
-}
-
-/// Reports the theft of any car that has just acquired a driver.
-///
-/// Keyed on the world changing rather than on the button press: a stolen car is
-/// a stolen car however the player came to be sitting in it, and hanging the
-/// crime off the input handler meant any other entry path silently skipped it.
-fn report_vehicle_theft(
-    mut crimes: MessageWriter<CrimeReported>,
-    stolen: Query<&Transform, Added<DrivenBy>>,
-) {
-    for transform in &stolen {
-        debug!("theft reported at {:?}", transform.translation);
-        crimes.write(CrimeReported {
-            kind: CrimeKind::VehicleTheft,
-            position: transform.translation,
-        });
-    }
 }
 
 /// Puts the player back on their feet if the car they were driving stops

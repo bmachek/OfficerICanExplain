@@ -398,24 +398,49 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_settled_car_stops_bouncing() {
-        let (mut app, car, _) = harness(VehicleClass::Sedan, 2.5);
-        step(&mut app, 400);
-        let before = transform_of(&app, car).translation.y;
-        step(&mut app, 120);
-        let after = transform_of(&app, car).translation.y;
+    /// Highest and lowest the body gets over a span of ticks.
+    fn ride_envelope(app: &mut App, car: Entity, ticks: usize) -> (f32, f32) {
+        let mut low = f32::MAX;
+        let mut high = f32::MIN;
+        for _ in 0..ticks {
+            step(app, 1);
+            let y = transform_of(app, car).translation.y;
+            low = low.min(y);
+            high = high.max(y);
+        }
+        (low, high)
+    }
 
+    #[test]
+    fn a_car_that_lands_bounces_before_it_settles() {
+        // Both halves matter. The bounce is the joke; the settling is what
+        // keeps a parked street from shimmering, and an underdamped spring
+        // with no floor to it does exactly that forever.
+        let (mut app, car, _) = harness(VehicleClass::Sedan, 2.5);
+        step(&mut app, 30);
+        let (low, high) = ride_envelope(&mut app, car, 80);
         assert!(
-            (after - before).abs() < 0.01,
-            "suspension still oscillating: {before:.4} -> {after:.4}"
+            high - low > 0.02,
+            "landed and absorbed all of it: only {:.4}m of travel",
+            high - low
+        );
+
+        step(&mut app, 700);
+        let (low, high) = ride_envelope(&mut app, car, 120);
+        assert!(
+            high - low < 0.02,
+            "still pogoing {:.4}m a full ten seconds after landing",
+            high - low
         );
     }
 
     #[test]
     fn all_four_wheels_find_the_ground() {
+        // Long enough for the springs to stop ringing. Underdamped suspension
+        // carries more or less than the car's weight on every half-cycle, so
+        // sampling the load mid-bounce measures the bounce, not the load.
         let (mut app, car, _) = harness(VehicleClass::Sedan, 2.0);
-        step(&mut app, 300);
+        step(&mut app, 900);
         let state = app.world().get::<VehicleState>(car).unwrap();
         assert_eq!(state.grounded_wheels(), WHEEL_COUNT);
         // Load should roughly add up to the car's weight.

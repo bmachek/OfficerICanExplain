@@ -317,7 +317,7 @@ fn drive_capture(
     mut exit: MessageWriter<AppExit>,
     drawables: Query<(), With<Mesh3d>>,
     cameras: Query<&Transform, With<CameraRig>>,
-    subjects: Query<(&Transform, &crate::combat::health::Health), With<Player>>,
+    subjects: Query<&Transform, With<Player>>,
 ) {
     progress.frame += 1;
     if request.fps_log && !progress.triggered {
@@ -343,7 +343,7 @@ fn drive_capture(
             .unwrap_or_else(|_| "<none>".into());
         let player = subjects
             .single()
-            .map(|(t, h)| format!("{:?} hp {:.0}", t.translation, h.current))
+            .map(|t| format!("{:?}", t.translation))
             .unwrap_or_else(|_| "<none>".into());
         info!(
             "capturing: {} meshes, camera at {}, player at {}",
@@ -380,13 +380,6 @@ fn autodrive(
     parked: Query<(Entity, &Transform), (With<Vehicle>, Without<DrivenBy>)>,
     mut inputs: Query<&mut VehicleInput>,
     states: Query<(&Transform, &crate::vehicle::controller::VehicleState)>,
-    wanted: Res<crate::crime::wanted::Wanted>,
-    police: Query<(
-        &crate::ai::police::PoliceUnit,
-        &Transform,
-        &crate::vehicle::controller::VehicleState,
-    )>,
-    mut crimes: MessageWriter<crate::crime::events::CrimeReported>,
     mut ticks: Local<u32>,
 ) {
     if !request.drive {
@@ -435,48 +428,15 @@ fn autodrive(
         input.handbrake = !fleeing;
     }
 
-    // Once stopped, keep committing crimes. Gunfire needs no witness, so this
-    // holds the heat up and forces the pursuit half of the loop to actually
-    // run instead of quietly cooling off.
-    if *ticks > 760 && (*ticks).is_multiple_of(64) {
-        crimes.write(crate::crime::events::CrimeReported {
-            kind: crate::crime::events::CrimeKind::Gunfire,
-            position: transform.translation,
-        });
-    }
-
     if (*ticks).is_multiple_of(48)
-        && let Ok((car, state)) = states.get(*vehicle)
+        && let Ok((_, state)) = states.get(*vehicle)
     {
-        let chasing = police.iter().filter(|(unit, _, _)| unit.has_sight).count();
-        let nearest = police
-            .iter()
-            .map(|(unit, police_transform, police_state)| {
-                (
-                    police_transform.translation.distance(transform.translation),
-                    unit.state,
-                    police_state.speed_kph(),
-                    unit.route.len(),
-                )
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0));
         info!(
-            "t={:>4} {:>5.1} km/h  wheels {}/4  |  {} stars, heat {:>5.1}, unseen {:>4.1}s  |               police {} ({} with eyes on)",
+            "t={:>4} {:>5.1} km/h  wheels {}/4",
             *ticks,
             state.speed_kph(),
             state.grounded_wheels(),
-            wanted.stars(),
-            wanted.heat(),
-            wanted.since_seen,
-            police.iter().len(),
-            chasing,
         );
-        if let Some((distance, state, speed, route)) = nearest {
-            info!(
-                "      nearest unit {distance:>6.1}m  {state:?}  {speed:>5.1} km/h  route {route}"
-            );
-        }
-        let _ = car;
     }
 }
 

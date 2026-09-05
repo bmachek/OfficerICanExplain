@@ -1,18 +1,18 @@
-//! Being hit by a car.
+//! Being hit by a car, and coming off worse for it.
 //!
-//! Until now a vehicle that drove into somebody on foot was nothing but a
-//! contact for the solver to sort out, and with a ton and a half arriving at
-//! 20 m/s against a capsule that Tnua is actively holding upright, the solver
-//! lost. The capsule ended up *inside* the bodywork, where it was carried along
-//! by a car it could not leave, walking did nothing because there was nowhere
-//! to walk, and the follow camera's wall cast hit panels 40cm away and put the
-//! view inside the car. Getting run over by a police cruiser meant riding
-//! around in one.
+//! A vehicle that drives into somebody on foot was once nothing but a contact
+//! for the solver to sort out, and with a ton and a half arriving at 20 m/s
+//! against a capsule that is actively held upright, the solver lost. The
+//! capsule ended up *inside* the bodywork, where it was carried along by a car
+//! it could not leave, walking did nothing because there was nowhere to walk,
+//! and the follow camera's wall cast hit panels 40cm away and put the view
+//! inside the car. Being run over meant riding around in one.
 //!
-//! So a car hitting a person is a gameplay event rather than a collision to be
-//! resolved: it hurts, it throws them clear, and it takes the character
-//! controller off them for a moment so the throw actually lands instead of
-//! being braked away by the walk basis in two frames.
+//! So a car hitting a person is an event rather than a collision to be
+//! resolved: it throws them clear and takes the character controller off them
+//! for a moment, so the throw actually lands instead of being braked away by
+//! the walk basis in two frames. Nobody is hurt — there is no health in this
+//! city — they are simply launched, and they bounce.
 //!
 //! Behind that sits [`unwedge_from_vehicles`], which is what makes the bug
 //! impossible rather than merely unlikely. However the solver, a spawn, an
@@ -21,59 +21,57 @@
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use bevy_tnua::TnuaToggle;
 
-use super::health::Health;
+use super::controller::Launched;
 use crate::core::schedule::GameSet;
 use crate::player::interact::{Driving, clear_spot};
 use crate::player::on_foot::{CAPSULE_LENGTH, CAPSULE_RADIUS, Player};
 use crate::vehicle::spawn::Vehicle;
 
 /// Closing speed below which a car is a shove rather than an accident. Walking
-/// pace: nudging someone aside in a car park must not cost them health.
+/// pace: nudging someone aside in a car park must not launch them across the
+/// street.
 const IMPACT_SPEED: f32 = 2.2;
-/// Health lost per m/s of closing speed above that. A cruiser ramming at
-/// 20 m/s takes off about 80, so being run over twice is fatal and once is a
-/// crisis — which is the weight the moment deserves.
-const DAMAGE_PER_SPEED: f32 = 4.5;
 /// Fraction of the closing speed handed to the victim as knockback.
 const KNOCKBACK: f32 = 0.8;
 /// Upward part of the throw, in m/s. Enough to clear a bumper rather than be
 /// swept under one.
 const LAUNCH_UP: f32 = 3.4;
 /// How long the victim stays off their feet. Also the window in which the same
-/// car cannot bill them again — without it, a car resting against somebody
-/// charges them sixty times a second.
+/// car cannot hit them again — without it, a car resting against somebody
+/// launches them sixty times a second.
 const DOWN_TIME: f32 = 1.35;
 
 /// On someone a car has just knocked off their feet.
 ///
-/// While this is on them their character controller is switched off, so they
-/// are a plain rigid body: the throw carries, and they tumble to a stop instead
-/// of landing mid-stride.
+/// While this is on them the bounce controller leaves them alone and their
+/// rotation is unlocked, so they are a plain elastic rigid body: the throw
+/// carries, and they cartwheel off the nearest wall instead of landing
+/// mid-stride and carrying on as though nothing had happened.
 #[derive(Component, Debug)]
 pub struct KnockedDown {
     pub left: f32,
 }
 
-/// Damage a car does to somebody on foot. Both arguments are speeds in m/s
-/// along the line from the car to the victim: how fast the car is bearing down
-/// on them, and how fast they are already going the same way.
+/// How hard a car actually lands a blow on somebody on foot, in m/s. Both
+/// arguments are speeds along the line from the car to the victim: how fast the
+/// car is bearing down on them, and how fast they are already going the same
+/// way.
 ///
 /// Two numbers rather than one closing speed, because the two halves are not
-/// symmetric. A parked car is never a hazard however hard somebody runs into it
-/// — the blow has to be *delivered* — while running with the car that is about
-/// to hit you genuinely does take the sting out of it.
-pub fn impact_damage(driven_at: f32, fleeing: f32) -> f32 {
+/// symmetric. A parked car never lands a blow however hard somebody runs into
+/// it — it has to be *delivered* — while running with the car that is about to
+/// hit you genuinely does take the sting out of it.
+pub fn wallop_force(driven_at: f32, fleeing: f32) -> f32 {
     if driven_at < IMPACT_SPEED {
         return 0.0;
     }
-    (driven_at - fleeing - IMPACT_SPEED).max(0.0) * DAMAGE_PER_SPEED
+    (driven_at - fleeing - IMPACT_SPEED).max(0.0)
 }
 
-pub struct ImpactPlugin;
+pub struct LaunchPlugin;
 
-impl Plugin for ImpactPlugin {
+impl Plugin for LaunchPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
@@ -88,22 +86,19 @@ impl Plugin for ImpactPlugin {
     }
 }
 
-/// Turns a car arriving at the player into damage and a throw.
+/// Turns a car arriving at the player into a throw.
 fn run_over_player(
     mut commands: Commands,
     spatial: SpatialQuery,
     vehicles: Query<(&Transform, &LinearVelocity), (With<Vehicle>, Without<Player>)>,
     mut players: Query<
-        (Entity, &Transform, &mut LinearVelocity, &mut Health),
+        (Entity, &Transform, &mut LinearVelocity),
         (With<Player>, Without<Driving>, Without<KnockedDown>),
     >,
 ) {
-    let Ok((player, transform, mut velocity, mut health)) = players.single_mut() else {
+    let Ok((player, transform, mut velocity)) = players.single_mut() else {
         return;
     };
-    if health.is_dead() {
-        return;
-    }
 
     // Slightly proud of the real capsule, so the hit registers as the bumper
     // arrives rather than once it is already through the ribs.
@@ -130,29 +125,26 @@ fn run_over_player(
         };
         let driven_at = car_velocity.0.dot(*away);
         let fleeing = velocity.0.dot(*away);
-        let hurt = impact_damage(driven_at, fleeing);
-        if hurt <= 0.0 {
+        let wallop = wallop_force(driven_at, fleeing);
+        if wallop <= 0.0 {
             continue;
         }
         let closing = driven_at - fleeing;
 
-        health.damage(hurt);
-        // Over the wing rather than under the wheels. Deliberately not a
-        // `Died` message even when this is fatal: `crime::consequences`
-        // despawns whatever a death names, and the player is respawned by
-        // `handle_player_death` reading their health instead.
+        // Over the wing rather than under the wheels.
         velocity.0 = *away * (closing * KNOCKBACK) + Vec3::Y * LAUNCH_UP;
         commands
             .entity(player)
-            .insert((KnockedDown { left: DOWN_TIME }, TnuaToggle::Disabled));
+            .insert((KnockedDown { left: DOWN_TIME }, Launched))
+            .remove::<LockedAxes>();
 
-        info!("run over at {closing:.1} m/s for {hurt:.0} damage");
+        info!("run over at {closing:.1} m/s, launched with {wallop:.1} m/s of wallop");
         // One car per frame. Being hit by two at once is still one accident.
         return;
     }
 }
 
-/// Hands control back once the victim has stopped rolling.
+/// Hands control back once the victim has stopped rolling, and stands them up.
 fn recover_from_knockdown(
     mut commands: Commands,
     time: Res<Time>,
@@ -166,8 +158,10 @@ fn recover_from_knockdown(
         commands
             .entity(entity)
             .remove::<KnockedDown>()
-            // Back to `Enabled` by absence: Tnua treats a missing toggle as on.
-            .remove::<TnuaToggle>();
+            .remove::<Launched>()
+            // Back on their feet, in both senses: a flummi that stayed free to
+            // rotate would spend the rest of the game lying on its face.
+            .insert(LockedAxes::ROTATION_LOCKED);
     }
 }
 
@@ -218,14 +212,14 @@ mod tests {
     use bevy::asset::AssetPlugin;
 
     #[test]
-    fn a_gentle_nudge_costs_nothing() {
+    fn a_gentle_nudge_launches_nobody() {
         assert_eq!(
-            impact_damage(IMPACT_SPEED * 0.5, 0.0),
+            wallop_force(IMPACT_SPEED * 0.5, 0.0),
             0.0,
             "rolling into somebody at walking pace is not an accident"
         );
         assert_eq!(
-            impact_damage(-14.0, 0.0),
+            wallop_force(-14.0, 0.0),
             0.0,
             "and neither is a car driving away from them"
         );
@@ -236,32 +230,28 @@ mod tests {
         // The car is stationary and the victim is sprinting straight at it,
         // which is a closing speed of 7.6 m/s and must still be worth nothing:
         // the blow has to be delivered by the car.
-        assert_eq!(impact_damage(0.0, -7.6), 0.0);
+        assert_eq!(wallop_force(0.0, -7.6), 0.0);
     }
 
     #[test]
     fn running_with_the_car_takes_the_sting_out() {
-        let stood_still = impact_damage(12.0, 0.0);
-        let running = impact_damage(12.0, 6.0);
+        let stood_still = wallop_force(12.0, 0.0);
+        let running = wallop_force(12.0, 6.0);
         assert!(
             running < stood_still,
-            "being clipped while already moving that way should hurt less"
+            "being clipped while already moving that way should throw you less far"
         );
-        assert!(running > 0.0, "but it should still hurt");
+        assert!(running > 0.0, "but it should still throw you");
     }
 
     #[test]
-    fn damage_climbs_with_the_speed_of_the_car() {
-        let slow = impact_damage(8.0, 0.0);
-        let fast = impact_damage(20.0, 0.0);
-        assert!(slow > 0.0, "a car at 8 m/s hurts");
+    fn the_throw_climbs_with_the_speed_of_the_car() {
+        let slow = wallop_force(8.0, 0.0);
+        let fast = wallop_force(20.0, 0.0);
+        assert!(slow > 0.0, "a car at 8 m/s picks somebody up");
         assert!(
             fast > slow * 2.0,
-            "and one at 20 m/s hurts a great deal more"
-        );
-        assert!(
-            fast < 100.0,
-            "but one hit at ramming speed should not be instantly fatal from full health"
+            "and one at 20 m/s sends them a great deal further"
         );
     }
 

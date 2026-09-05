@@ -516,7 +516,7 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
     match class {
         // Three-box saloon: short bonnet, upright screen, a boot behind the
         // cabin. The default shape of a car.
-        VehicleClass::Sedan | VehicleClass::Police => BodyProfile {
+        VehicleClass::Sedan => BodyProfile {
             // Just above the widest part of the section, where a saloon's
             // shoulder line runs.
             belt: 0.10,
@@ -1071,12 +1071,13 @@ mod tests {
     fn a_cabin_sits_above_its_shells_beltline() {
         // If the greenhouse is not taller than the body it is set into, it is
         // invisible and the car reads as a brick.
+        // Every shape with a passenger cabin. A truck is a cab and a box, and
+        // its roofline is the top of the shell rather than of a greenhouse.
         for class in [
             VehicleClass::Sedan,
             VehicleClass::Coupe,
             VehicleClass::Sports,
             VehicleClass::Pickup,
-            VehicleClass::Police,
         ] {
             let BodyProfile { shell, cabin, .. } = profile(class);
             let beltline = shell.iter().map(|s| s.top).fold(f32::MIN, f32::max);

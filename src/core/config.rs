@@ -14,6 +14,8 @@ pub struct GameConfig {
     /// Everything about world layout derives from this. Same seed, same city.
     pub world_seed: u64,
     pub world: WorldConfig,
+    /// How much of a rubber ball everything in this city is.
+    pub bounce: BounceConfig,
     pub camera: CameraConfig,
     pub audio: AudioConfig,
     /// What the renderer is allowed to spend. Resolved from a single quality
@@ -40,6 +42,37 @@ pub struct WorldConfig {
     pub start_wetness: f32,
     /// And how much of the sky is under cloud when it opens, 0 to 1.
     pub start_cover: f32,
+}
+
+/// The elastic half of the simulation.
+///
+/// Two unrelated things are tuned from here, and they are kept together because
+/// they have to be tuned against each other. `restitution` and `threshold`
+/// belong to the solver: they decide how a body that is *not* in charge of
+/// itself rebounds. `hop_speed` and the accelerations belong to the character
+/// controller: they decide how a body that *is* in charge of itself gets about,
+/// which in this city means hopping. A player who bounces off a wall harder
+/// than they can hop is a player who has lost control of the game.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BounceConfig {
+    /// Fraction of closing speed returned by a collision, 0 to 1.
+    pub restitution: f32,
+    /// Closing speed, in m/s, below which the solver stops bothering to bounce.
+    ///
+    /// Avian's default is 1.0, which is most of a hop: without lowering this,
+    /// every small knock is absorbed and the city reads as rubber only when
+    /// something arrives at speed.
+    pub threshold: f32,
+    /// Upward speed, in m/s, taken on at the bottom of every hop.
+    pub hop_speed: f32,
+    /// How hard a grounded body pulls itself towards the speed it wants.
+    pub ground_accel: f32,
+    /// And in the air, where there is nothing to push against. Much lower, so
+    /// that a hop commits you to where it is going.
+    pub air_accel: f32,
+    /// How far a figure squashes at the bottom of a hop, as a fraction of its
+    /// height. Zero is a rigid body on a pogo stick; too much is a puddle.
+    pub squash: f32,
 }
 
 /// The mixer. Three numbers rather than one, because the background bed and
@@ -83,6 +116,16 @@ impl Default for GameConfig {
                 // A fair day with a little cloud in it. Where the weather drifts
                 // from here is the seed's business.
                 start_cover: 0.18,
+            },
+            bounce: BounceConfig {
+                // Not 1.0. A perfectly elastic city never settles, and a
+                // pedestrian who never settles cannot walk anywhere.
+                restitution: 0.86,
+                threshold: 0.05,
+                hop_speed: 2.8,
+                ground_accel: 42.0,
+                air_accel: 22.0,
+                squash: 0.35,
             },
             camera: CameraConfig {
                 speed: 25.0,
