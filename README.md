@@ -376,6 +376,14 @@ keeping a stain off the roof of the car parked over it is the distance over
 which it fades out, which is thirty centimetres. And decals are blended, so they
 are sorted, unlike everything else in the city.
 
+Which is what the hundred and thirty metre draw distance is for, and it is what
+pays for the density. A street that has been dug up twice and driven over for
+twenty years is not a clean sheet with three marks on it, so there are a lot of
+these — but a manhole cover is 700mm across, and past a hundred and something
+metres it is one pixel that still has to be sorted against every other one. The
+count that makes a road look driven on is only affordable if nearly all of it is
+never drawn. Like everything else with a range, it scales with the preset.
+
 The failure this technique is prone to is invisible from head height. The
 projection pushes a decal's UV outside its own image as the view flattens, and
 the sampler clamps rather than wraps, so whatever is in the edge texel gets

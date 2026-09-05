@@ -27,6 +27,7 @@
 //!   comes free — but a forward-only camera would draw every decal at full
 //!   opacity, floating.
 
+use bevy::camera::visibility::VisibilityRange;
 use bevy::image::{ImageAddressMode, ImageSampler};
 use bevy::pbr::decal::{ForwardDecal, ForwardDecalMaterial, ForwardDecalMaterialExt};
 use bevy::prelude::*;
@@ -58,22 +59,42 @@ const REACH: f32 = 0.30;
 const FLOAT: f32 = 0.02;
 
 /// Metres of street between manhole covers.
-const MANHOLES: f32 = 47.0;
+///
+/// Closer than one utility's access chambers are built, because a street has
+/// several: foul water, surface water, gas, and whoever last pulled fibre
+/// down it. Counting them as one line at one spacing is the cheap way to get
+/// the count a real carriageway has.
+const MANHOLES: f32 = 29.0;
 /// Metres of kerb between gullies.
-const GULLIES: f32 = 26.0;
+const GULLIES: f32 = 19.0;
 /// Stains and patches per hundred metres of street.
-const BLEMISHES: f32 = 3.4;
+///
+/// High, and it was much too low. A city street that has been dug up twice
+/// and driven over for twenty years is not a clean sheet with three marks on
+/// it, and the first pass at this put so little down that the road read as
+/// new tarmac from a first-floor window.
+const BLEMISHES: f32 = 13.0;
 
 /// Diameter of a manhole cover, in metres. A real one is 600mm plus its frame.
 const MANHOLE_SIZE: f32 = 0.72;
 /// A gully grating, across the kerb and along it.
-const GULLY_SIZE: Vec2 = Vec2::new(0.44, 0.66);
+const GULLY_SIZE: Vec2 = Vec2::new(0.50, 0.86);
 /// How far in from the kerb face the grating sits.
 const GULLY_INSET: f32 = 0.26;
 /// How far back from a junction a car leaves its rubber, in metres.
 const SKID_LENGTH: f32 = 7.5;
 /// Half the gap between the two tracks of one car, in metres.
 const TRACK: f32 = 0.74;
+
+/// How far away wear is still drawn, in metres, before the preset's
+/// `lod_scale` is applied.
+///
+/// Shorter than anything else in the city, and it is what pays for the
+/// density above. A manhole cover is 700mm across, so past a hundred and
+/// something metres it is a pixel — and unlike a wall it is a *blended* pixel,
+/// sorted against every other one. The count that makes a street look driven
+/// on is only affordable if almost all of it is never drawn.
+pub const RANGE: f32 = 130.0;
 
 const SIZE: u32 = 256;
 /// Fraction of a decal's texture kept clear at its edge.
@@ -155,7 +176,13 @@ fn gully() -> Image {
             * margin(u, v);
         // Bars run across the gutter so a wheel crosses them rather than
         // dropping between them — which is also why they are the long way on.
-        let bar = ((v - 0.5) * 7.0).fract();
+        //
+        // Measured from `v` and not from the middle of the grating, because
+        // `fract` truncates towards zero: on the half of the image where
+        // `v - 0.5` is negative it hands back a negative fraction, the mask
+        // below rejects all of it, and the grating comes out with bars over
+        // its top half and a blank plate under them.
+        let bar = (v * 7.0).fract();
         let slot = smoothstep01((0.30 - (bar - 0.5).abs()) / 0.12)
             * smoothstep01((0.38 - (u - 0.5).abs()) / 0.04);
 
@@ -302,25 +329,31 @@ fn spaced(length: f32, every: f32) -> i32 {
     (length / every).round() as i32
 }
 
-fn lay(
-    commands: &mut Commands,
-    material: &Handle<Decal>,
+struct Mark<'a> {
+    material: &'a Handle<Decal>,
     at: Vec2,
     size: Vec2,
     yaw: f32,
-    chunk: IVec2,
-) {
+}
+
+fn lay(commands: &mut Commands, mark: Mark, chunk: IVec2, draw: f32) {
     commands.spawn((
         ChunkOf(chunk),
         ForwardDecal,
-        MeshMaterial3d(material.clone()),
-        Transform::from_xyz(at.x, FLOAT, at.y)
-            .with_rotation(Quat::from_rotation_y(yaw))
-            .with_scale(Vec3::new(size.x, 1.0, size.y)),
+        MeshMaterial3d(mark.material.clone()),
+        Transform::from_xyz(mark.at.x, FLOAT, mark.at.y)
+            .with_rotation(Quat::from_rotation_y(mark.yaw))
+            .with_scale(Vec3::new(mark.size.x, 1.0, mark.size.y)),
+        VisibilityRange {
+            start_margin: 0.0..0.0,
+            end_margin: (draw.max(1.0) * 0.9)..draw.max(1.0),
+            use_aabb: false,
+        },
     ));
 }
 
 /// Everything one street has under it and everything spilled on it.
+#[expect(clippy::too_many_arguments, reason = "the other per-street spawners")]
 pub fn spawn_edge(
     commands: &mut Commands,
     kit: &WearKit,
@@ -329,6 +362,7 @@ pub fn spawn_edge(
     from: Vec2,
     to: Vec2,
     chunk: IVec2,
+    draw: f32,
 ) {
     let Ok(direction) = Dir2::new(to - from) else {
         return;
@@ -344,11 +378,14 @@ pub fn spawn_edge(
         let side = across * (edge.width * rng.random_range(-0.22..0.22));
         lay(
             commands,
-            &kit.manhole,
-            from + *direction * down + side,
-            Vec2::splat(MANHOLE_SIZE),
-            yaw + rng.random_range(-0.4..0.4),
+            Mark {
+                material: &kit.manhole,
+                at: from + *direction * down + side,
+                size: Vec2::splat(MANHOLE_SIZE),
+                yaw: yaw + rng.random_range(-0.4..0.4),
+            },
             chunk,
+            draw,
         );
     }
 
@@ -360,11 +397,16 @@ pub fn spawn_edge(
         for side in [-1.0f32, 1.0] {
             lay(
                 commands,
-                &kit.gully,
-                from + *direction * down + across * (side * (edge.width * 0.5 - GULLY_INSET)),
-                GULLY_SIZE,
-                yaw,
+                Mark {
+                    material: &kit.gully,
+                    at: from
+                        + *direction * down
+                        + across * (side * (edge.width * 0.5 - GULLY_INSET)),
+                    size: GULLY_SIZE,
+                    yaw,
+                },
                 chunk,
+                draw,
             );
         }
     }
@@ -383,27 +425,36 @@ pub fn spawn_edge(
             // and every road has been dug up.
             r if r < 0.42 => lay(
                 commands,
-                &kit.patch,
-                at,
-                Vec2::new(rng.random_range(1.3..3.4), rng.random_range(1.1..2.6)),
-                yaw + rng.random_range(-0.1..0.1),
+                Mark {
+                    material: &kit.patch,
+                    at,
+                    size: Vec2::new(rng.random_range(1.3..3.4), rng.random_range(1.1..2.6)),
+                    yaw: yaw + rng.random_range(-0.1..0.1),
+                },
                 chunk,
+                draw,
             ),
             r if r < 0.72 => lay(
                 commands,
-                &kit.crack,
-                at,
-                Vec2::new(rng.random_range(0.7..1.5), rng.random_range(1.8..4.0)),
-                yaw + rng.random_range(-0.5..0.5),
+                Mark {
+                    material: &kit.crack,
+                    at,
+                    size: Vec2::new(rng.random_range(0.7..1.5), rng.random_range(1.8..4.0)),
+                    yaw: yaw + rng.random_range(-0.5..0.5),
+                },
                 chunk,
+                draw,
             ),
             _ => lay(
                 commands,
-                &kit.oil,
-                at,
-                Vec2::splat(rng.random_range(0.5..1.3)),
-                turn,
+                Mark {
+                    material: &kit.oil,
+                    at,
+                    size: Vec2::splat(rng.random_range(0.5..1.3)),
+                    yaw: turn,
+                },
                 chunk,
+                draw,
             ),
         }
     }
@@ -417,6 +468,7 @@ pub fn spawn_junction(
     at: Vec2,
     arms: &[(Vec2, f32)],
     chunk: IVec2,
+    draw: f32,
 ) {
     for &(towards, width) in arms {
         let Ok(direction) = Dir2::new(towards - at) else {
@@ -439,11 +491,14 @@ pub fn spawn_junction(
             for track in [-TRACK, TRACK] {
                 lay(
                     commands,
-                    &kit.skid,
-                    centre + offset + right * track,
-                    Vec2::new(0.55, SKID_LENGTH),
-                    yaw,
+                    Mark {
+                        material: &kit.skid,
+                        at: centre + offset + right * track,
+                        size: Vec2::new(0.55, SKID_LENGTH),
+                        yaw,
+                    },
                     chunk,
+                    draw,
                 );
             }
         }
@@ -452,11 +507,14 @@ pub fn spawn_junction(
         if rng.random_range(0.0..1.0) < 0.55 {
             lay(
                 commands,
-                &kit.oil,
-                at + *direction * (width * 0.75) + lane * (width * 0.24),
-                Vec2::splat(rng.random_range(0.6..1.4)),
-                rng.random_range(0.0..std::f32::consts::TAU),
+                Mark {
+                    material: &kit.oil,
+                    at: at + *direction * (width * 0.75) + lane * (width * 0.24),
+                    size: Vec2::splat(rng.random_range(0.6..1.4)),
+                    yaw: rng.random_range(0.0..std::f32::consts::TAU),
+                },
                 chunk,
+                draw,
             );
         }
     }
@@ -529,6 +587,30 @@ mod tests {
                 fraction * 100.0
             );
         }
+    }
+
+    /// `fract` truncates towards zero, so a repeat measured from the middle of
+    /// an image lands on one half of it and not the other: the negative half
+    /// hands back negative fractions and whatever mask reads them rejects the
+    /// lot. The grating is the only decal here with a repeat in it, and it lost
+    /// the bars off its bottom half to exactly that.
+    #[test]
+    fn the_grating_has_bars_all_the_way_down_it() {
+        let image = gully();
+        let data = image.data.as_ref().expect("painted images carry pixels");
+        let size = image.texture_descriptor.size.width;
+        let column = size / 2;
+        let slot = |y: u32| data[((y * size + column) * 4) as usize] < 25;
+
+        for half in [0..size / 2, size / 2..size] {
+            assert!(
+                half.clone().any(slot),
+                "rows {half:?} of the grating are a blank plate"
+            );
+        }
+        // And several of them, or it is a plate with one line across it.
+        let edges = (1..size).filter(|&y| slot(y) != slot(y - 1)).count();
+        assert!(edges >= 10, "the grating has {edges} bar edges down it");
     }
 
     /// The quad's length runs along local Z, so the yaw has to map +Z onto the

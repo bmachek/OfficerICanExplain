@@ -172,6 +172,7 @@ pub fn update_streaming(
     let foliage_range = config
         .graphics
         .lod_distance(crate::world::vegetation::RANGE);
+    let wear_range = config.graphics.lod_distance(crate::world::decals::RANGE);
     for chunk in arriving {
         // One stream per chunk and per subsystem, so a chunk's furniture is
         // identical every time it is walked back into rather than reshuffling,
@@ -230,6 +231,7 @@ pub fn update_streaming(
                     from,
                     to,
                     chunk,
+                    wear_range,
                 );
             }
         }
@@ -264,6 +266,7 @@ pub fn update_streaming(
                     node.pos,
                     &arms,
                     chunk,
+                    wear_range,
                 );
             }
         }
