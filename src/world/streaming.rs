@@ -13,7 +13,7 @@ use super::City;
 use super::buildings::{ChunkOf, CityAssets, spawn_block};
 use super::markings::{MarkingAssets, spawn_edge};
 use super::props::PropAssets;
-use super::roadgraph::EdgeId;
+use super::roadgraph::{EdgeId, NodeId};
 use crate::core::config::GameConfig;
 
 pub const CHUNK_SIZE: f32 = 250.0;
@@ -42,6 +42,11 @@ pub struct ChunkIndex {
     /// and the half that hangs over the edge is a few metres of line beyond a
     /// boundary nobody can see.
     streets: HashMap<IVec2, Vec<EdgeId>>,
+    /// Junctions, filed by the chunk they stand in. Separate from the streets
+    /// because a junction belongs to one chunk unambiguously and a street does
+    /// not, and because what goes up at a junction — signals — is placed once
+    /// per junction rather than once per arm.
+    junctions: HashMap<IVec2, Vec<NodeId>>,
 }
 
 impl ChunkIndex {
@@ -64,7 +69,16 @@ impl ChunkIndex {
                 .push(EdgeId(i as u32));
         }
 
-        Self { blocks, streets }
+        let mut junctions: HashMap<IVec2, Vec<NodeId>> = HashMap::default();
+        for (id, node) in graph.nodes() {
+            junctions.entry(chunk_of(node.pos)).or_default().push(id);
+        }
+
+        Self {
+            blocks,
+            streets,
+            junctions,
+        }
     }
 
     pub fn chunk_count(&self) -> usize {
@@ -77,6 +91,10 @@ impl ChunkIndex {
 
     pub fn streets_in(&self, chunk: IVec2) -> Option<&[EdgeId]> {
         self.streets.get(&chunk).map(|v| v.as_slice())
+    }
+
+    pub fn junctions_in(&self, chunk: IVec2) -> Option<&[NodeId]> {
+        self.junctions.get(&chunk).map(|v| v.as_slice())
     }
 
     /// Which chunks should be resident for a camera at `focus`.
@@ -126,7 +144,9 @@ pub fn update_streaming(
     assets: Res<CityAssets>,
     paint: Res<MarkingAssets>,
     props: Res<PropAssets>,
+    foliage: Res<crate::world::vegetation::FoliageKit>,
     roofs: Res<crate::world::rooftop::RoofKit>,
+    shells: Res<crate::world::shell::ShellKit>,
     mut active: ResMut<ActiveChunks>,
     mut timer: ResMut<StreamTimer>,
     cameras: Query<&GlobalTransform, With<crate::player::camera::CameraRig>>,
@@ -144,18 +164,38 @@ pub fn update_streaming(
     let ctx = crate::world::buildings::BlockContext {
         assets: &assets,
         roofs: &roofs,
+        shells: &shells,
         seed: config.world_seed,
         lod_scale: config.graphics.lod_scale,
     };
+    let foliage_range = config
+        .graphics
+        .lod_distance(crate::world::vegetation::RANGE);
     for chunk in arriving {
+        // One stream per chunk and per subsystem, so a chunk's furniture is
+        // identical every time it is walked back into rather than reshuffling,
+        // and so planting a tree cannot move a bin.
+        let mut planting = crate::core::rng::stream_for_chunk(
+            config.world_seed,
+            crate::core::rng::stream::VEGETATION,
+            (chunk.x, chunk.y),
+        );
+
         if let Some(block_indices) = index.blocks_in(chunk) {
             for &i in block_indices {
-                spawn_block(&mut commands, &ctx, &city.blocks[i], chunk);
+                let block = &city.blocks[i];
+                spawn_block(&mut commands, &ctx, block, chunk);
+                super::vegetation::spawn_park(
+                    &mut commands,
+                    &foliage,
+                    &mut planting,
+                    block,
+                    chunk,
+                    foliage_range,
+                );
             }
         }
         if let Some(streets) = index.streets_in(chunk) {
-            // One stream per chunk, so a chunk's furniture is identical every
-            // time it is walked back into rather than reshuffling.
             let mut rng = crate::core::rng::stream_for_chunk(
                 config.world_seed,
                 crate::core::rng::stream::PROPS,
@@ -166,6 +206,42 @@ pub fn update_streaming(
                 let (from, to) = (city.graph.node(edge.a).pos, city.graph.node(edge.b).pos);
                 spawn_edge(&mut commands, &paint, edge, from, to, chunk);
                 super::props::spawn_edge(&mut commands, &props, &mut rng, edge, from, to, chunk);
+                super::vegetation::spawn_edge(
+                    &mut commands,
+                    &foliage,
+                    &mut planting,
+                    edge,
+                    from,
+                    to,
+                    chunk,
+                    foliage_range,
+                );
+            }
+        }
+        if let Some(junctions) = index.junctions_in(chunk) {
+            for &id in junctions {
+                let node = city.graph.node(id);
+                let arms: Vec<(Vec2, f32)> = node
+                    .edges
+                    .iter()
+                    .map(|&edge| {
+                        let edge = city.graph.edge(edge);
+                        let other = if edge.a == id { edge.b } else { edge.a };
+                        (city.graph.node(other).pos, edge.width)
+                    })
+                    .collect();
+                let arterial = node
+                    .edges
+                    .iter()
+                    .any(|&edge| city.graph.edge(edge).arterial);
+                super::props::spawn_junction(
+                    &mut commands,
+                    &props,
+                    node.pos,
+                    &arms,
+                    arterial,
+                    chunk,
+                );
             }
         }
     }

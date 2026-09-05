@@ -64,7 +64,7 @@ following and start ramming.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, tunables, deterministic RNG, screenshot tool |
-| `world` | City generator, road graph, chunk streaming, day/night, weather, lights, street furniture, roofs, wet roads |
+| `world` | City generator, road graph, chunk streaming, day/night, weather, lights, facade shells and level of detail, trees, street furniture, roofs, wet roads |
 | `player` | Input mapping, character controller, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, damage, parked-car spawning |
 | `ai` | Traffic, pedestrians, police pursuit, shared steering, walk cycles |
@@ -107,7 +107,7 @@ cargo run --features raytracing
 ## Development
 
 ```sh
-cargo test                                  # 237 tests
+cargo test                                  # 256 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -128,7 +128,7 @@ cargo run -- --screenshot shots/map.png    --follow --map
 ```
 
 `tools/shoot.sh` renders the whole battery — aerial, street, dusk, night, rain,
-dawn, overcast, bodywork, showroom, driving, map — so a rendering change can be
+dawn, overcast, facade, park, bodywork, showroom, driving, map — so a rendering change can be
 judged against the last one rather than against a memory of it. `--all-presets` shoots every
 tier into `shots/<preset>/`, and frame times are collected at the end, because
 a screenshot says a change looks right and says nothing about whether it can be
@@ -239,6 +239,98 @@ and it terminates in a fixed number of steps rather than in however many tries
 overlap-testing needs. The seed comes from the footprint rather than from a
 spawn counter, because chunks regenerate whenever the player walks back into
 them and a counter would re-roll a different roof each time.
+
+## Facades
+
+Every building was a scaled cube with a facade painted onto it. That carries
+further than it sounds — the normal map bevels the panes, the grain shader gives
+the wall a material — but it fails in exactly the situation the player is in
+most of the time: standing on a pavement looking *along* a street. At a glancing
+angle a painted reveal has no parallax and no silhouette, so every window in the
+row lies in one plane and the eye reads the whole street as a poster.
+
+So the near wall is geometry: panes set back behind the wall with jambs around
+them, sills, string courses at the floor lines, a cornice at the top, a sign
+board over the shopfronts with awnings under it, and balconies on the kinds of
+building that would have them.
+
+**There is not a single metre in `world::shell`.** A reveal is a fraction of a
+*bay*, a course is a fraction of a *storey*, and both come out of the same
+`FacadeClass` grid that `world::texture` paints the windows on — one description
+of the window grid, read twice, so the reveals cannot land beside the glass. It
+is also the whole reason one mesh serves four thousand buildings: the shell is
+built in unit-cube space and scaled by the building's own transform, so a length
+baked into it comes out multiplied by whatever that building happens to measure.
+A twelve-centimetre reveal on a house would be half a metre on a tower.
+Expressed as a fraction of a bay it survives the scaling, because a bay is
+scaled by the same number.
+
+Sixteen meshes cover the city: four height classes, two levels of detail, two
+variants. Two variants rather than one because a residential street is a row of
+buildings of the same class, and a single pattern would put every balcony in it
+on the same bay of the same floor.
+
+| Level | Out to | What it is |
+|---|---|---|
+| LOD0 | 80 m | Reveals, jambs, sills, balconies, awnings, every course |
+| LOD1 | 250 m | The horizontal courses only |
+| LOD2 | beyond | The plain box, and the collider |
+
+All three levels carry the same transform and measure from the entity's origin
+rather than from a bounding box, so all three measure the *same* distance and
+hand over on precisely the same metre — which is what Bevy needs before it will
+dither one into the next instead of blinking between them. The facade shader
+calls `visibility_range_dither` itself; a custom fragment shader that forgets to
+is how a crossfade becomes two solid buildings in the same place.
+
+Shadow casting follows the chain rather than sitting on one level of it, because
+Bevy's directional-light visibility honours the same ranges the camera does: a
+level culled by distance casts nothing.
+
+The distances are multiplied by the preset's `lod_scale`, and then clamped. The
+clamp is a resolution argument rather than a frame budget — at 1440p across a
+sixty-degree field a pixel subtends about four ten-thousandths of a radian, so a
+two-hundred-millimetre reveal is one pixel wide at five hundred metres and less
+than one beyond it. Photo mode is entitled never to drop detail it could see;
+that is where it stops being the same sentence.
+
+## Trees
+
+There was not one. A park was a green rectangle and a residential street was two
+rows of boxes with a bin between them.
+
+A tree is two entities: a trunk whose mesh is translated so that the entity's
+origin sits on the ground, and one crown as its child. The crown is several
+blobs merged into a single mesh at build time — three offset ones for a plane
+tree, three stacked for a poplar — because the silhouette is the entire
+difference between the species as far as anyone on the pavement can tell, and
+merging costs nothing once, per species, at startup.
+
+The trunk pivoting at its foot is what lets the wind work. `Weather::wind`
+drives a rotation about the axis perpendicular to it, and the crown comes along
+because it is a child: no vertex animation, no custom material. Two sine
+frequencies rather than one, because a street of metronomes in step is worse
+than no movement at all, and the cycle runs from a third of the lean to all of
+it rather than through zero — a gust adds to a lean, it does not reverse it.
+
+How far each species gives is checked against the cantilever it is. Tip
+deflection goes as length cubed over the fourth power of the trunk's radius, so
+a poplar bends further than a cherry despite the thicker trunk, because it is
+twice the height.
+
+Only what the camera can see sways. That is not an optimisation of the maths —
+the maths is four sines — but of the *write*: touching `Transform` queues an
+entity for transform propagation and a fresh upload of its instance data, and
+there are thousands of these standing in chunks nobody is looking at.
+
+A street is either an avenue or it is not, decided once per street rather than
+per tree, and it is planted with one species — a row of trees goes in at once,
+by one council, from one nursery. Parks get a jittered grid, a clipped hedge
+round the edge, and a gap in the middle of each side to walk in through.
+
+Street furniture roughly doubled at the same time: parking meters, benches,
+newspaper boxes, planters, phone boxes. Junctions with three or more arms, at
+least one of them arterial, get a signal on each approach.
 
 ## Deferred
 
@@ -496,10 +588,34 @@ pursuit, and everything but the player's own car is positioned in the world.
   perspective and the distance fog instead, which is a different model with a
   different look; the seam is soft, but it is there.
 
-- Buildings are still an extrusion with a parapet and roof clutter on top.
-  Window reveals, cornices and balconies are geometry the facade texture only
-  implies, and adding them needs the level-of-detail system that the roof
-  clutter and the plinth course currently only sketch.
+- The 60 fps at 1440p budget is unverified. Everything in `shots/` was rendered
+  on a software rasteriser, where a frame takes seconds and the frame times say
+  nothing whatever about a GPU. The geometry here was sized against a resolution
+  argument — a reveal is under a pixel past five hundred metres — rather than
+  against a measurement. The measurement is still owed.
+
+- Meshlets are not built. GPU cluster culling is the right technique for the
+  LOD0 shells and it is what a modern engine would carry this geometry with; it
+  needs an offline `MeshletMesh` conversion and a material pipeline of its own,
+  and there is no way to demonstrate the win from here.
+
+- The window grid is a count, not a size. A class fixes how many windows a wall
+  has — three for a house, nine for a tower — so a wide industrial shed gets
+  three bays across twenty-three metres and an eight-metre bay with it. The
+  shell follows the texture exactly, so it inherits this rather than fixing it.
+
+- A reveal is cut into the wall by a fraction of a bay, and the wall's depth
+  axis is scaled by the footprint's *other* side. A building twice as deep as it
+  is wide has reveals twice as deep on its short faces. Lots are subdivided by
+  always splitting the longer side, so the error stays under a factor of two.
+
+- Trees lean, they do not flutter. A rigid rotation about the foot is honest for
+  a swaying trunk and says nothing at all about leaves, and above a gale the
+  model stops rather than pretending — a tree thrashing in a storm is not
+  something one rotation can portray.
+
+- Traffic signals are unlit and nothing obeys them. A crossroads showing green
+  down every arm at once would be a clearer lie than one showing nothing.
 
 - Screen-space reflections can only reflect what is on screen. A car just out of
   frame stops appearing in the road under it. Light probes do not have that
@@ -507,7 +623,8 @@ pursuit, and everything but the player's own car is positioned in the world.
   only one of them is built.
 
 - Pedestrians cross roads wherever their route turns, rather than at crossings.
-- Traffic has no right-of-way rules at junctions; it brakes for obstacles only.
+- Traffic has no right-of-way rules at junctions; it brakes for obstacles only —
+  the signals above are the visible half of a rule that is not implemented.
 - Vehicle damage is not visually modelled — cars are wrecked, not deformed.
 - Facades are procedural, so walls read as materials rather than photographs.
   Scanning them needs a custom material with a detail UV; see above.

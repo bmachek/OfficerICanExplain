@@ -25,6 +25,9 @@ pub mod stream {
     pub const RAIN: u64 = 8;
     /// Cloud cover and wind. Sampled rather than drawn — see `key_for`.
     pub const WEATHER: u64 = 9;
+    /// Street trees and park planting. Its own stream rather than sharing the
+    /// props one, so that planting a tree cannot shift which bin lands where.
+    pub const VEGETATION: u64 = 10;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

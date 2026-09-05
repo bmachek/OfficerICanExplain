@@ -33,6 +33,7 @@ use bevy::camera::visibility::VisibilityRange;
 use bevy::light::NotShadowCaster;
 
 use super::rooftop::{self, RoofKit};
+use super::shell::{self, ShellKit};
 use super::texture::{self, FacadeClass};
 
 /// Pavement height above the road surface.
@@ -385,6 +386,7 @@ impl CityAssets {
 pub struct BlockContext<'a> {
     pub assets: &'a CityAssets,
     pub roofs: &'a RoofKit,
+    pub shells: &'a ShellKit,
     pub seed: u64,
     pub lod_scale: f32,
 }
@@ -458,12 +460,56 @@ fn spawn_building(
     let seed = rooftop::seed_for(ctx.seed, building.footprint);
     let parapet = rooftop::parapet(seed, class);
 
+    // The wall, at three levels of detail. All three carry the same transform
+    // and the same material, and `use_aabb: false` measures from the entity's
+    // origin, so all three measure the same distance and hand over to one
+    // another on precisely the same metre — which is what Bevy needs before it
+    // will dither one into the next instead of blinking between them.
+    let material = assets.material_for(district, building.palette, class);
+    let wall = Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
+        .with_scale(Vec3::new(size.x, height, size.y));
+    let (near, far) = shell::ranges(ctx.lod_scale);
+    // Which balconies and which awnings, from the building's own seed rather
+    // than from a counter, for the same reason its roof is.
+    let variant = (seed >> 19) as u32;
+
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(ctx.shells.get(class, shell::Detail::Full, variant)),
+        MeshMaterial3d(material.clone()),
+        wall,
+        VisibilityRange {
+            start_margin: 0.0..0.0,
+            end_margin: shell::handover(near),
+            use_aabb: false,
+        },
+    ));
+    commands.spawn((
+        ChunkOf(chunk),
+        Mesh3d(ctx.shells.get(class, shell::Detail::Coarse, variant)),
+        MeshMaterial3d(material.clone()),
+        wall,
+        VisibilityRange {
+            start_margin: shell::handover(near),
+            end_margin: shell::handover(far),
+            use_aabb: false,
+        },
+    ));
+    // The plain box, and with it the collider — which is deliberately on the
+    // level of detail that is never culled by *distance*, only by being close.
+    // A visibility range hides a mesh and does not touch its collider, so the
+    // building stays solid at every distance; putting it anywhere else would
+    // work today and break the first time these ranges are reordered.
     commands.spawn((
         ChunkOf(chunk),
         Mesh3d(assets.unit_cube.clone()),
-        MeshMaterial3d(assets.material_for(district, building.palette, class)),
-        Transform::from_xyz(center.x, height * 0.5 + SIDEWALK_HEIGHT, center.y)
-            .with_scale(Vec3::new(size.x, height, size.y)),
+        MeshMaterial3d(material),
+        wall,
+        VisibilityRange {
+            start_margin: shell::handover(far),
+            end_margin: f32::INFINITY..f32::INFINITY,
+            use_aabb: false,
+        },
         RigidBody::Static,
         // Unit cube: Avian scales it by the transform above.
         Collider::cuboid(1.0, 1.0, 1.0),

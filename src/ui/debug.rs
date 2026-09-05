@@ -186,6 +186,9 @@ fn graphics_section(ui: &mut egui::Ui, config: &mut GameConfig, caps: &Capabilit
             .text("shadow distance")
             .suffix(" m"),
     );
+    // Read once, when a chunk spawns, and baked into the visibility ranges of
+    // everything in it. Moving this changes what the *next* chunk to stream in
+    // does; walk out of a chunk and back into it to see it applied here.
     ui.add(egui::Slider::new(&mut g.lod_scale, 0.25..=3.0).text("lod scale"));
 
     ui.label(

@@ -9,10 +9,12 @@ pub mod props;
 pub mod road;
 pub mod roadgraph;
 pub mod rooftop;
+pub mod shell;
 pub mod streaming;
 pub mod streetlights;
 pub mod texture;
 pub mod timeofday;
+pub mod vegetation;
 pub mod weather;
 
 use avian3d::prelude::*;
@@ -37,6 +39,7 @@ impl Plugin for WorldPlugin {
             weather::WeatherPlugin,
             timeofday::TimeOfDayPlugin,
             streetlights::StreetLightPlugin,
+            vegetation::VegetationPlugin,
         ))
         .init_resource::<streaming::ActiveChunks>()
         .init_resource::<streaming::StreamTimer>()
@@ -73,6 +76,8 @@ fn generate_city(
     commands.insert_resource(city);
     commands.insert_resource(props::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(rooftop::build_assets(&mut meshes, &mut materials));
+    commands.insert_resource(shell::build_assets(&mut meshes));
+    commands.insert_resource(vegetation::build_assets(&mut meshes, &mut materials));
     commands.insert_resource(markings::build_assets(
         &mut meshes,
         &mut materials,
