@@ -47,6 +47,10 @@ just looks worse. Nothing is checked in and nothing is required to build.
 | **F1** | Free-fly debug camera (hold right mouse to look) |
 | **F5 / F9** | Quick save / quick load |
 
+Take your hand off the mouse and the camera swings itself in behind you — hard
+behind a car, gently on foot, and never while you are aiming or already
+steering the view yourself. Both rates are on the dev panel.
+
 Gamepad is mapped throughout: left stick moves, right stick looks, A jumps,
 Y interacts, right trigger fires, B is the handbrake.
 
