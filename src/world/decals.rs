@@ -222,12 +222,16 @@ fn oil() -> Image {
         // the halo is most of what makes it read as soaked in rather than
         // painted on.
         let core = spill(u, v, 23, 0.55);
-        let value = 0.030 + (1.0 - core) * 0.045;
+        // Not black, and not opaque. From above, a near-black stain at full
+        // alpha is a hole in the road: no grain shows through it and its edge
+        // is a silhouette. What it wants to be is dark asphalt with the road's
+        // own texture still under it.
+        let value = 0.055 + (1.0 - core) * 0.05;
         [
             byte(value * 1.15),
             byte(value),
             byte(value * 1.05),
-            byte(body * 0.92),
+            byte(body * 0.72),
         ]
     })
 }
@@ -307,9 +311,11 @@ pub fn build_assets(images: &mut Assets<Image>, decals: &mut Assets<Decal>) -> W
         gully: decals.add(material(images, gully(), 0.66, 0.35)),
         // Fresh asphalt is rougher than the road it was cut into, not smoother.
         patch: decals.add(material(images, patch(), 0.94, 0.0)),
-        // The one thing on a road that is glossier than the road. In the rain
-        // it is the only thing that is not.
-        oil: decals.add(material(images, oil(), 0.26, 0.0)),
+        // Glossier than the road, but nothing like a mirror. At 0.26 the
+        // Fresnel term takes over at a windscreen's angle and the stain comes
+        // back as a bright blue puddle of reflected sky — which is a puddle,
+        // and this is a stain that soaked in.
+        oil: decals.add(material(images, oil(), 0.45, 0.0)),
         crack: decals.add(material(images, crack(), 0.95, 0.0)),
         skid: decals.add(material(images, skid(), 0.58, 0.0)),
     }
