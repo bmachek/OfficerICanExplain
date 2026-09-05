@@ -23,10 +23,8 @@
 
 mod ai;
 mod audio;
-mod combat;
+mod bounce;
 mod core;
-mod crime;
-mod mission;
 mod player;
 mod render;
 mod save;
@@ -67,9 +65,7 @@ fn main() {
             crate::core::CorePlugin,
             crate::ai::AiPlugin,
             crate::audio::AudioPlugin,
-            crate::crime::CrimePlugin,
-            crate::combat::CombatPlugin,
-            crate::mission::MissionPlugin,
+            crate::bounce::BouncePlugin,
             crate::save::SavePlugin,
             crate::player::PlayerPlugin,
             crate::render::RenderPlugin,

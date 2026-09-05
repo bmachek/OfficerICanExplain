@@ -11,10 +11,15 @@
 //! identically however many times the player walks in and out of it — the same
 //! rule the buildings follow.
 //!
-//! Nothing here has a collider. Walking through a bin is a smaller lie than
-//! several hundred more static bodies for the physics solver to consider, and
-//! the player is never close enough to a bin to care.
+//! None of it used to have a collider: walking through a bin was a smaller lie
+//! than several hundred more bodies for the solver to consider. That trade is
+//! off now, because in a city made of rubber the furniture is what you bounce
+//! off. It is split in two by whether the real thing is bolted down — a bollard
+//! is a post set in concrete and a bin is a bin — so a car mounting the kerb
+//! scatters the bins and stops dead at the bollard, which is the right joke
+//! both times.
 
+use avian3d::prelude::*;
 use bevy::prelude::*;
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
@@ -66,6 +71,50 @@ impl Prop {
         (Prop::PhoneBox, 1),
     ];
 
+    /// Whether a piece of street furniture is bolted down, and if not, what it
+    /// weighs.
+    ///
+    /// The split is the one a street actually makes. A bollard is a post set in
+    /// concrete and a bin is a bin; in a city where everything else bounces,
+    /// which of the two a car sends cartwheeling down the pavement is the whole
+    /// joke, and it has to be the right one or the street stops making sense.
+    fn footing(self) -> Footing {
+        match self {
+            Prop::Bollard | Prop::Sign | Prop::Meter | Prop::Hydrant | Prop::PhoneBox => {
+                Footing::Bolted
+            }
+            // Heavy enough that a person bouncing off one loses the argument,
+            // light enough that a car does not.
+            Prop::PostBox => Footing::Loose(120.0),
+            Prop::Planter => Footing::Loose(140.0),
+            Prop::Bench => Footing::Loose(85.0),
+            Prop::NewsBox => Footing::Loose(38.0),
+            Prop::Bin => Footing::Loose(14.0),
+        }
+    }
+
+    /// The collider for one kind, in the same dimensions its mesh is built at.
+    ///
+    /// Written out a second time rather than derived from the mesh, because a
+    /// convex hull of a cylinder is a worse cylinder and Avian has the real
+    /// thing. The duplication is held honest by a test that walks every kind
+    /// and checks the collider against the standing height the meshes are
+    /// placed by.
+    fn collider(self) -> Collider {
+        match self {
+            Prop::Bin => Collider::cylinder(0.26, 0.95),
+            Prop::Bollard => Collider::cylinder(0.11, 0.95),
+            Prop::Hydrant => Collider::cylinder(0.16, 0.72),
+            Prop::PostBox => Collider::cuboid(0.52, 1.25, 0.46),
+            Prop::Sign => Collider::cylinder(0.045, 2.35),
+            Prop::Meter => Collider::cuboid(0.14, 1.22, 0.12),
+            Prop::Bench => Collider::cuboid(1.75, 0.46, 0.55),
+            Prop::NewsBox => Collider::cuboid(0.44, 1.08, 0.40),
+            Prop::Planter => Collider::cuboid(0.86, 0.58, 0.86),
+            Prop::PhoneBox => Collider::cuboid(0.94, 2.42, 0.94),
+        }
+    }
+
     fn pick(rng: &mut ChaCha8Rng) -> Prop {
         let total: u32 = Self::TABLE.iter().map(|(_, weight)| weight).sum();
         let mut ticket = rng.random_range(0..total);
@@ -77,6 +126,15 @@ impl Prop {
         }
         Prop::Bollard
     }
+}
+
+/// How firmly a prop is attached to the pavement.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Footing {
+    /// Set in concrete. Things bounce off it; it does not bounce off them.
+    Bolted,
+    /// Free to be sent down the street, at this mass in kilograms.
+    Loose(f32),
 }
 
 #[derive(Resource)]
@@ -292,6 +350,10 @@ pub fn spawn_junction(
         let (head, casing, head_height) = &assets.signal_head;
         commands.spawn((
             ChunkOf(chunk),
+            // A signal is a mast in the pavement. Nothing about this city is
+            // funny enough to be worth a set of lights bouncing down a street.
+            RigidBody::Static,
+            Collider::cylinder(0.075, SIGNAL_HEIGHT),
             Mesh3d(post.clone()),
             MeshMaterial3d(steel.clone()),
             Transform::from_xyz(foot.x, SIDEWALK_HEIGHT + height * 0.5, foot.y)
@@ -361,7 +423,16 @@ pub fn spawn_edge(
                 Mesh3d(mesh.clone()),
                 MeshMaterial3d(material.clone()),
                 Transform::from_xyz(at.x, base, at.y).with_rotation(Quat::from_rotation_y(yaw)),
+                prop.collider(),
             ));
+            match prop.footing() {
+                Footing::Bolted => {
+                    entity.insert(RigidBody::Static);
+                }
+                Footing::Loose(mass) => {
+                    entity.insert((RigidBody::Dynamic, Mass(mass)));
+                }
+            }
 
             if prop == Prop::Sign {
                 // The plate rides near the top of its post, facing along the
@@ -479,5 +550,48 @@ mod tests {
             offset > width * 0.5,
             "furniture at {offset} is inside a {width}m road"
         );
+    }
+
+    #[test]
+    fn every_collider_is_the_size_of_the_thing_it_stands_in_for() {
+        // The dimensions are written twice — once for the mesh, once for the
+        // collider — so this walks every kind and checks the second copy
+        // against the standing height the first one is placed by. A mismatch
+        // is furniture floating a hand's breadth off the pavement, or sunk
+        // into it, and it is invisible until somebody bounces off the gap.
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let assets = build_assets(&mut meshes, &mut materials);
+
+        for (prop, _) in Prop::TABLE {
+            let (_, _, height) = assets.parts(prop);
+            let aabb = prop.collider().aabb(Vec3::ZERO, Quat::IDENTITY);
+            let collider_height = aabb.max.y - aabb.min.y;
+            assert!(
+                (collider_height - height).abs() < 1e-3,
+                "{prop:?} is drawn {height:.3}m tall and collides {collider_height:.3}m tall"
+            );
+        }
+    }
+
+    #[test]
+    fn the_things_that_should_not_move_do_not() {
+        // A bollard that a car can knock over is not a bollard, and a street
+        // whose signs all end up in a heap at the first junction stops reading
+        // as a street within about a minute of play.
+        assert_eq!(Prop::Bollard.footing(), Footing::Bolted);
+        assert_eq!(Prop::Sign.footing(), Footing::Bolted);
+        assert!(matches!(Prop::Bin.footing(), Footing::Loose(_)));
+    }
+
+    #[test]
+    fn a_bin_gives_way_more_easily_than_a_planter() {
+        let mass = |prop: Prop| match prop.footing() {
+            Footing::Loose(mass) => mass,
+            Footing::Bolted => f32::INFINITY,
+        };
+        assert!(mass(Prop::Bin) < mass(Prop::NewsBox));
+        assert!(mass(Prop::NewsBox) < mass(Prop::Bench));
+        assert!(mass(Prop::Bench) < mass(Prop::Planter));
     }
 }

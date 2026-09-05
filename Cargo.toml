@@ -30,8 +30,6 @@ bevy = { version = "0.19", features = [
     "bluenoise_texture",
 ] }
 avian3d = "0.7"
-bevy-tnua = "0.32"
-bevy-tnua-avian3d = "0.12"
 leafwing-input-manager = "0.21"
 bevy_egui = "0.42"
 rand = "0.10"

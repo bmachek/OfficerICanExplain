@@ -14,10 +14,18 @@
 //! is an entity at the shoulder or hip with the mesh hung *below* it. Rotating a
 //! centred capsule swings it about its middle, and a leg that does that is not
 //! walking, it is being stirred.
+//!
+//! Every part also carries its [`Rest`] pose, which is what makes the whole
+//! figure squash and stretch as one. The alternative — scaling the body entity
+//! — is not available: Avian scales a collider by its transform, so a figure
+//! flattening at the bottom of a hop would flatten its own collider with it and
+//! sink through the pavement.
 
 use bevy::prelude::*;
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
+
+use crate::bounce::controller::Bouncer;
 
 /// Metres walked per full stride cycle — one step of each foot.
 const STRIDE: f32 = 1.45;
@@ -53,9 +61,18 @@ impl Limb {
     }
 }
 
-/// The upper body, which rises and falls with the stride.
+/// The head. Marked because it is the one part of a figure that anything else
+/// wants to find: it is where the face goes.
 #[derive(Component)]
-pub struct Torso;
+pub struct Head;
+
+/// Where a part of a figure sits when the body is at its natural height.
+///
+/// Held per part rather than looked up from the part's kind, so that posing a
+/// figure is one query over its children instead of a match with a arm for
+/// every piece of anatomy.
+#[derive(Component, Clone, Copy)]
+pub struct Rest(pub Vec3);
 
 /// How far through a stride this figure is, and how fast it is covering ground.
 ///
@@ -174,24 +191,29 @@ pub fn dress(
 
     entity.insert(WalkCycle::default());
     entity.with_children(|parent| {
+        let torso = Vec3::new(0.0, body::TORSO_CENTRE, 0.0);
         parent.spawn((
-            Torso,
+            Rest(torso),
             Mesh3d(assets.torso.clone()),
             MeshMaterial3d(coat.clone()),
-            Transform::from_xyz(0.0, body::TORSO_CENTRE, 0.0),
+            Transform::from_translation(torso),
         ));
+        let head = Vec3::new(0.0, body::HEAD_CENTRE, 0.0);
         parent.spawn((
-            Torso,
+            Head,
+            Rest(head),
             Mesh3d(assets.head.clone()),
             MeshMaterial3d(skin.clone()),
-            Transform::from_xyz(0.0, body::HEAD_CENTRE, 0.0),
+            Transform::from_translation(head),
         ));
 
         for (limb, side) in [(Limb::LeftArm, -1.0f32), (Limb::RightArm, 1.0)] {
+            let joint = Vec3::new(side * body::SHOULDER_X, body::SHOULDER, 0.0);
             parent
                 .spawn((
                     limb,
-                    Transform::from_xyz(side * body::SHOULDER_X, body::SHOULDER, 0.0),
+                    Rest(joint),
+                    Transform::from_translation(joint),
                     Visibility::default(),
                 ))
                 // Hung below the joint, so the parent's rotation swings it from
@@ -204,10 +226,12 @@ pub fn dress(
         }
 
         for (limb, side) in [(Limb::LeftLeg, -1.0f32), (Limb::RightLeg, 1.0)] {
+            let joint = Vec3::new(side * 0.10, body::HIP, 0.0);
             parent
                 .spawn((
                     limb,
-                    Transform::from_xyz(side * 0.10, body::HIP, 0.0),
+                    Rest(joint),
+                    Transform::from_translation(joint),
                     Visibility::default(),
                 ))
                 .with_child((
@@ -224,37 +248,43 @@ pub fn limb_angle(limb: Limb, phase: f32) -> f32 {
     (phase + limb.phase_offset()).sin() * limb.amplitude()
 }
 
-/// How much the body rises at a given point in the stride.
+/// Advances every figure's stride, poses its limbs, and squashes it into
+/// whatever part of its hop it is in.
 ///
-/// Twice per cycle, because the body lifts over each leg in turn — a bob at the
-/// stride frequency is a limp.
-pub fn bob(phase: f32) -> f32 {
-    (phase * 2.0).cos() * 0.022
-}
-
-/// Advances every figure's stride and poses its limbs.
+/// The stride and the hop are independent on purpose. The legs are paced by
+/// ground covered and the squash by the bounce, so a flummi sailing across a
+/// junction is still running in mid-air — which is both what a cartoon does and
+/// what the walk cycle would do anyway if asked.
 pub fn animate(
     time: Res<Time>,
-    figures: Query<(&mut WalkCycle, &Children)>,
-    mut limbs: Query<(&Limb, &mut Transform), Without<Torso>>,
-    mut torsos: Query<&mut Transform, (With<Torso>, Without<Limb>)>,
+    config: Res<crate::core::config::GameConfig>,
+    figures: Query<(&mut WalkCycle, Option<&Bouncer>, &Children)>,
+    mut parts: Query<(&mut Transform, &Rest, Option<&Limb>)>,
 ) {
     let dt = time.delta_secs();
-    for (mut cycle, children) in figures {
+    for (mut cycle, bouncer, children) in figures {
         // Driven by distance covered, not by time: someone running has to take
         // faster steps, not longer ones, or they moonwalk.
         cycle.phase = (cycle.phase + cycle.speed / STRIDE * TAU_F32 * dt) % TAU_F32;
 
+        let (vertical, horizontal) = match bouncer {
+            Some(bouncer) => {
+                crate::bounce::squash::stretch(bouncer.hop_phase(), config.bounce.squash)
+            }
+            None => (1.0, 1.0),
+        };
+        let pose = Vec3::new(horizontal, vertical, horizontal);
+
         for &child in children {
-            if let Ok((limb, mut transform)) = limbs.get_mut(child) {
+            let Ok((mut transform, rest, limb)) = parts.get_mut(child) else {
+                continue;
+            };
+            // The rest pose scaled by the squash, so parts stay attached to one
+            // another as the body flattens instead of pulling apart at the neck.
+            transform.translation = rest.0 * pose;
+            transform.scale = pose;
+            if let Some(limb) = limb {
                 transform.rotation = Quat::from_rotation_x(limb_angle(*limb, cycle.phase));
-            } else if let Ok(mut transform) = torsos.get_mut(child) {
-                let rest = if transform.translation.y > body::HEAD_CENTRE - 0.01 {
-                    body::HEAD_CENTRE
-                } else {
-                    body::TORSO_CENTRE
-                };
-                transform.translation.y = rest + bob(cycle.phase);
             }
         }
     }
@@ -328,16 +358,17 @@ mod tests {
     }
 
     #[test]
-    fn the_body_bobs_twice_per_stride() {
-        // Once per stride is a limp: the body lifts over each leg in turn.
-        let mut peaks = 0;
-        for i in 0..1024 {
-            let phase = TAU_F32 * i as f32 / 1024.0;
-            let step = TAU_F32 / 1024.0;
-            if bob(phase) > bob(phase - step) && bob(phase) >= bob(phase + step) {
-                peaks += 1;
-            }
+    fn the_head_rides_above_the_chest_at_every_squash() {
+        // The parts are posed by scaling one rest pose, so they can only come
+        // apart if the scale is applied to one of them and not the other.
+        for step in 0..16 {
+            let (vertical, _) = crate::bounce::squash::stretch(step as f32 / 16.0, 0.35);
+            let head = body::HEAD_CENTRE * vertical;
+            let chest = body::TORSO_CENTRE * vertical;
+            assert!(
+                head > chest,
+                "the head sank into the chest at {vertical:.2}"
+            );
         }
-        assert_eq!(peaks, 2, "counted {peaks} rises per stride");
     }
 }

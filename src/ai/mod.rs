@@ -1,8 +1,7 @@
-//! Agents that inhabit the city: traffic now, pedestrians and police to follow.
+//! Agents that inhabit the city: traffic, and the crowd on the pavement.
 
 pub mod figure;
 pub mod pedestrian;
-pub mod police;
 pub mod steering;
 pub mod traffic;
 
@@ -12,10 +11,6 @@ pub struct AiPlugin;
 
 impl Plugin for AiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            traffic::TrafficPlugin,
-            pedestrian::PedestrianPlugin,
-            police::PolicePlugin,
-        ));
+        app.add_plugins((traffic::TrafficPlugin, pedestrian::PedestrianPlugin));
     }
 }

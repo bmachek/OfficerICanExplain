@@ -3,7 +3,7 @@
 //! The save is a small RON document rather than a snapshot of the ECS. The
 //! world is fully reproducible from its seed, so there is nothing to store
 //! about the city itself — only the handful of facts that are *not* derivable:
-//! where the player is, what they own, and how much trouble they are in.
+//! where the player is, and what time it is when they get there.
 
 use std::path::{Path, PathBuf};
 
@@ -11,17 +11,14 @@ use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 use serde::{Deserialize, Serialize};
 
-use crate::combat::health::Health;
 use crate::core::config::GameConfig;
 use crate::core::schedule::GameSet;
-use crate::crime::wanted::Wanted;
-use crate::mission::{Campaign, Money};
 use crate::player::input::Action;
 use crate::player::on_foot::Player;
 use crate::world::timeofday::TimeOfDay;
 
 /// Bumped whenever the format changes incompatibly.
-pub const SAVE_VERSION: u32 = 1;
+pub const SAVE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveGame {
@@ -29,13 +26,7 @@ pub struct SaveGame {
     /// The city regenerates from this; nothing about it is stored.
     pub world_seed: u64,
     pub player: [f32; 3],
-    pub money: u32,
-    pub health: f32,
-    pub armor: f32,
-    pub heat: f32,
     pub hour: f32,
-    pub completed_missions: Vec<String>,
-    pub next_mission: usize,
 }
 
 impl SaveGame {
@@ -67,13 +58,10 @@ impl Plugin for SavePlugin {
 
 fn quick_save(
     config: Res<GameConfig>,
-    money: Res<Money>,
-    campaign: Res<Campaign>,
-    wanted: Res<Wanted>,
     clock: Res<TimeOfDay>,
-    players: Query<(&Transform, &Health, &ActionState<Action>), With<Player>>,
+    players: Query<(&Transform, &ActionState<Action>), With<Player>>,
 ) {
-    let Ok((transform, health, action_state)) = players.single() else {
+    let Ok((transform, action_state)) = players.single() else {
         return;
     };
     if !action_state.just_pressed(&Action::QuickSave) {
@@ -84,13 +72,7 @@ fn quick_save(
         version: SAVE_VERSION,
         world_seed: config.world_seed,
         player: transform.translation.to_array(),
-        money: money.0,
-        health: health.current,
-        armor: health.armor,
-        heat: wanted.heat(),
         hour: clock.hours,
-        completed_missions: campaign.completed.clone(),
-        next_mission: campaign.next,
     };
 
     let path = save_path();
@@ -108,13 +90,10 @@ fn quick_save(
 }
 
 fn quick_load(
-    mut money: ResMut<Money>,
-    mut campaign: ResMut<Campaign>,
-    mut wanted: ResMut<Wanted>,
     mut clock: ResMut<TimeOfDay>,
-    mut players: Query<(&mut Transform, &mut Health, &ActionState<Action>), With<Player>>,
+    mut players: Query<(&mut Transform, &ActionState<Action>), With<Player>>,
 ) {
-    let Ok((mut transform, mut health, action_state)) = players.single_mut() else {
+    let Ok((mut transform, action_state)) = players.single_mut() else {
         return;
     };
     if !action_state.just_pressed(&Action::QuickLoad) {
@@ -142,12 +121,6 @@ fn quick_load(
     }
 
     transform.translation = Vec3::from_array(save.player);
-    health.current = save.health;
-    health.armor = save.armor;
-    money.0 = save.money;
-    campaign.completed = save.completed_missions;
-    campaign.next = save.next_mission;
-    wanted.restore(save.heat);
     clock.hours = save.hour;
 
     info!("loaded from {}", path.display());
@@ -162,13 +135,7 @@ mod tests {
             version: SAVE_VERSION,
             world_seed: 0xA17E_5EED,
             player: [12.5, 1.0, -403.25],
-            money: 2750,
-            health: 64.0,
-            armor: 25.0,
-            heat: 118.5,
             hour: 21.25,
-            completed_missions: vec!["cold_open".into()],
-            next_mission: 1,
         }
     }
 

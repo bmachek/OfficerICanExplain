@@ -1,33 +1,28 @@
-//! The player on foot.
+//! The player on foot — or rather, the player in the air, most of the time.
 //!
-//! Movement goes through Tnua rather than a hand-rolled kinematic controller.
-//! A floating character controller solves stairs, kerbs and slopes by hovering
-//! the body a fixed distance above whatever is beneath it, which is exactly the
-//! set of problems that make hand-written controllers snag on geometry — and
-//! this city is nothing but kerbs and corners.
+//! Movement went through a floating character controller, which solves stairs,
+//! kerbs and slopes by hovering the body a fixed distance above whatever is
+//! beneath it. That is exactly the right answer for a city made of kerbs and
+//! corners, and exactly the wrong one for a city made of rubber: a body held
+//! off the ground by a spring never forms a contact, and restitution is a
+//! property of a contact. The player could be declared as elastic as you like
+//! and would still land like a sack.
+//!
+//! So the float is gone and [`crate::bounce::controller`] has the job instead.
+//! It costs the free kerb handling — a hop clears a kerb rather than stepping
+//! over one — which turns out to be the better trade, because clearing a kerb
+//! by bouncing over it is the game.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
-use bevy_tnua::builtins::{
-    TnuaBuiltinJump, TnuaBuiltinJumpConfig, TnuaBuiltinWalk, TnuaBuiltinWalkConfig,
-};
-use bevy_tnua::prelude::*;
-use bevy_tnua_avian3d::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 
+use crate::bounce::controller::{Bouncer, JUMP_SCALE};
 use crate::core::schedule::GameSet;
 use crate::player::camera::CameraRig;
 use crate::player::input::Action;
 use crate::world::City;
 use crate::world::buildings::SIDEWALK_HEIGHT;
-
-/// What the player can do on foot. The derive generates `PlayerSchemeConfig`,
-/// with one field per variant plus the walk basis.
-#[derive(TnuaScheme)]
-#[scheme(basis = TnuaBuiltinWalk)]
-pub enum PlayerScheme {
-    Jump(TnuaBuiltinJump),
-}
 
 #[derive(Component)]
 pub struct Player;
@@ -35,9 +30,8 @@ pub struct Player;
 pub const CAPSULE_RADIUS: f32 = 0.38;
 /// Length of the cylindrical section; total height is this plus two radii.
 pub const CAPSULE_LENGTH: f32 = 1.05;
-/// Must exceed the distance from the capsule's centre to its lowest point
-/// (`CAPSULE_LENGTH / 2 + CAPSULE_RADIUS`), or the controller fights the floor.
-const FLOAT_HEIGHT: f32 = 1.0;
+/// Distance from the capsule's centre to its lowest point.
+pub const STAND_HEIGHT: f32 = CAPSULE_LENGTH / 2.0 + CAPSULE_RADIUS;
 
 const SPRINT_SPEED: f32 = 7.6;
 /// Fraction of top speed used when not sprinting.
@@ -47,16 +41,12 @@ pub struct OnFootPlugin;
 
 impl Plugin for OnFootPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            TnuaControllerPlugin::<PlayerScheme>::new(FixedUpdate),
-            TnuaAvian3dPlugin::new(FixedUpdate),
-        ))
-        .add_systems(PostStartup, spawn_player)
-        .add_systems(
+        app.add_systems(PostStartup, spawn_player).add_systems(
             Update,
             drive_player
-                .in_set(TnuaUserControlsSystems)
-                .in_set(GameSet::Simulation),
+                .in_set(GameSet::Simulation)
+                // Ahead of the bouncer, which reads what this writes.
+                .before(crate::bounce::controller::bounce_bodies),
         );
     }
 }
@@ -65,7 +55,6 @@ fn spawn_player(
     mut commands: Commands,
     city: Res<City>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut configs: ResMut<Assets<PlayerSchemeConfig>>,
     figures: Res<crate::ai::figure::FigureAssets>,
 ) {
     // Start on an actual street rather than at the origin, which is usually
@@ -79,36 +68,16 @@ fn spawn_player(
     let mut player = commands.spawn((
         Name::new("Player"),
         Player,
-        Transform::from_xyz(start.x, SIDEWALK_HEIGHT + FLOAT_HEIGHT + 0.2, start.y),
+        Transform::from_xyz(start.x, SIDEWALK_HEIGHT + STAND_HEIGHT + 0.2, start.y),
         Visibility::default(),
         RigidBody::Dynamic,
         Collider::capsule(CAPSULE_RADIUS, CAPSULE_LENGTH),
-        // Tnua corrects tipping, but locking rotation stops the capsule from
-        // toppling in the frames before it gets the chance.
+        // Upright while in charge of themselves. `bounce::launch` takes this
+        // off when somebody is thrown, which is when tumbling is the point.
         LockedAxes::ROTATION_LOCKED,
-        TnuaController::<PlayerScheme>::default(),
-        TnuaConfig::<PlayerScheme>(configs.add(PlayerSchemeConfig {
-            basis: TnuaBuiltinWalkConfig {
-                speed: SPRINT_SPEED,
-                float_height: FLOAT_HEIGHT,
-                acceleration: 55.0,
-                air_acceleration: 18.0,
-                // Anything steeper than this is a wall, not a ramp.
-                max_slope: std::f32::consts::FRAC_PI_4 * 1.2,
-                ..default()
-            },
-            jump: TnuaBuiltinJumpConfig {
-                height: 1.5,
-                ..default()
-            },
-        })),
-        // Without a sensor shape the ground check is a single ray, which snags
-        // on kerb edges and building corners.
-        TnuaAvian3dSensorShape(Collider::cylinder(CAPSULE_RADIUS * 0.94, 0.0)),
+        Bouncer::new(STAND_HEIGHT),
         // The player carries the input map; everything else reads ActionState.
         Action::default_input_map(),
-        crate::combat::health::Health::new(100.0),
-        crate::combat::weapons::Weapon::new(crate::combat::weapons::WeaponKind::Pistol, 90),
     ));
 
     // The same figure the crowd wears, in a jacket that reads at a distance —
@@ -125,15 +94,13 @@ fn spawn_player(
 fn drive_player(
     rigs: Query<&CameraRig>,
     mut players: Query<
-        (&ActionState<Action>, &mut TnuaController<PlayerScheme>),
+        (&ActionState<Action>, &mut Bouncer, &mut Transform),
         (With<Player>, Without<crate::player::interact::Driving>),
     >,
 ) {
-    let Ok((action_state, mut controller)) = players.single_mut() else {
+    let Ok((action_state, mut bouncer, mut transform)) = players.single_mut() else {
         return;
     };
-    // Tnua requires this every frame, before the basis and any actions.
-    controller.initiate_action_feeding();
 
     // Movement is camera-relative: pushing forward means "away from the
     // camera", which is what every third-person game trains players to expect.
@@ -143,22 +110,25 @@ fn drive_player(
     let direction = (frame * Vec3::NEG_Z * input.y + frame * Vec3::X * input.x).normalize_or_zero();
 
     let pace = if action_state.pressed(&Action::Sprint) {
-        1.0
+        SPRINT_SPEED
     } else {
-        JOG_PACE
+        SPRINT_SPEED * JOG_PACE
     };
+    bouncer.desired = direction.xz() * pace;
 
-    controller.basis = TnuaBuiltinWalk {
-        desired_motion: direction * pace,
-        // Turn to face travel; `None` when idle so the body holds its heading.
-        desired_forward: Dir3::new(direction).ok(),
-    };
+    // Turn to face travel, and hold the last heading when idle. Written here
+    // rather than left to the solver because rotation is locked: nothing else
+    // is going to turn the body, and a figure that walks sideways looks like a
+    // bug rather than like a joke.
+    if let Ok(facing) = Dir2::new(direction.xz()) {
+        transform.rotation = Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
+    }
 
-    if action_state.pressed(&Action::Jump) {
-        controller.action(PlayerScheme::Jump(TnuaBuiltinJump {
-            allow_in_air: false,
-            ..default()
-        }));
+    // Only off the ground. Held down, this would otherwise be a pogo stick with
+    // no ceiling: every landing would take the bigger hop, and each one lands
+    // faster than the last.
+    if action_state.pressed(&Action::Jump) && bouncer.grounded {
+        bouncer.hop_scale = JUMP_SCALE;
     }
 }
 
@@ -169,7 +139,7 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
 
-    /// Steps physics without a window, so "does the character stand on the
+    /// Steps physics without a window, so "does the character bounce on the
     /// ground or sink through it" is a test rather than something we squint at
     /// in a screenshot.
     fn harness(spawn_height: f32) -> (App, Entity) {
@@ -179,8 +149,6 @@ mod tests {
             AssetPlugin::default(),
             TransformPlugin,
             PhysicsPlugins::default(),
-            TnuaControllerPlugin::<PlayerScheme>::new(FixedUpdate),
-            TnuaAvian3dPlugin::new(FixedUpdate),
         ));
         // Avian's collider cache reads `AssetEvent<Mesh>`; `AssetPlugin` alone
         // does not register the Mesh asset type outside a render app.
@@ -189,18 +157,8 @@ mod tests {
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / 64.0,
         )));
-
-        let config = app
-            .world_mut()
-            .resource_mut::<Assets<PlayerSchemeConfig>>()
-            .add(PlayerSchemeConfig {
-                basis: TnuaBuiltinWalkConfig {
-                    speed: SPRINT_SPEED,
-                    float_height: FLOAT_HEIGHT,
-                    ..default()
-                },
-                jump: TnuaBuiltinJumpConfig::default(),
-            });
+        app.init_resource::<crate::core::config::GameConfig>();
+        app.add_systems(Update, crate::bounce::controller::bounce_bodies);
 
         // Ground: top face at y = 0.
         app.world_mut().spawn((
@@ -217,9 +175,7 @@ mod tests {
                 RigidBody::Dynamic,
                 Collider::capsule(CAPSULE_RADIUS, CAPSULE_LENGTH),
                 LockedAxes::ROTATION_LOCKED,
-                TnuaController::<PlayerScheme>::default(),
-                TnuaConfig::<PlayerScheme>(config),
-                TnuaAvian3dSensorShape(Collider::cylinder(CAPSULE_RADIUS * 0.94, 0.0)),
+                Bouncer::new(STAND_HEIGHT),
             ))
             .id();
 
@@ -242,62 +198,84 @@ mod tests {
         app.world().get::<Transform>(player).unwrap().translation.y
     }
 
-    #[test]
-    fn float_height_clears_the_capsule() {
-        // If this fails the controller is trying to hover lower than the body's
-        // own lowest point, and it will grind into the floor forever.
-        let lowest_point = CAPSULE_LENGTH / 2.0 + CAPSULE_RADIUS;
-        assert!(
-            FLOAT_HEIGHT > lowest_point,
-            "float height {FLOAT_HEIGHT} must exceed capsule reach {lowest_point}"
-        );
+    /// Highest and lowest the body gets over a span of ticks.
+    fn envelope(app: &mut App, player: Entity, ticks: usize) -> (f32, f32) {
+        let mut low = f32::MAX;
+        let mut high = f32::MIN;
+        for _ in 0..ticks {
+            app.update();
+            let y = height_of(app, player);
+            low = low.min(y);
+            high = high.max(y);
+        }
+        (low, high)
     }
 
     #[test]
-    fn player_settles_on_the_ground_rather_than_falling_through() {
+    fn a_dropped_player_lands_on_the_ground_rather_than_through_it() {
         let (mut app, player) = harness(6.0);
         settle(&mut app, 240);
-
-        let y = height_of(&app, player);
+        let (low, _) = envelope(&mut app, player, 120);
         assert!(
-            (y - FLOAT_HEIGHT).abs() < 0.25,
-            "expected to hover near {FLOAT_HEIGHT}, settled at {y}"
+            low > STAND_HEIGHT - 0.2,
+            "sank to {low}, below the soles at {STAND_HEIGHT}"
         );
     }
 
-    /// Feeds the walk basis directly, the way `drive_player` does.
-    fn walk(app: &mut App, player: Entity, direction: Vec3, ticks: usize) {
+    #[test]
+    fn a_player_standing_still_keeps_bouncing() {
+        // The whole conceit of the game. A flummi that settles is a person.
+        let (mut app, player) = harness(2.0);
+        settle(&mut app, 240);
+        let (low, high) = envelope(&mut app, player, 120);
+        assert!(
+            high - low > 0.1,
+            "only moved {:.3}m over two seconds; that is standing, not bouncing",
+            high - low
+        );
+    }
+
+    #[test]
+    fn the_bounce_holds_its_height_instead_of_dying_away() {
+        // Restitution alone would damp out within a second or two. The hop is
+        // assigned rather than added precisely so that it does not.
+        let (mut app, player) = harness(2.0);
+        settle(&mut app, 240);
+        let (_, early) = envelope(&mut app, player, 90);
+        settle(&mut app, 300);
+        let (_, late) = envelope(&mut app, player, 90);
+        assert!(
+            (late - early).abs() < 0.15,
+            "bounce apex drifted from {early:.2} to {late:.2}"
+        );
+    }
+
+    /// Feeds the bouncer directly, the way `drive_player` does.
+    fn walk(app: &mut App, player: Entity, direction: Vec2, ticks: usize) {
         for _ in 0..ticks {
-            let mut controller = app
-                .world_mut()
-                .get_mut::<TnuaController<PlayerScheme>>(player)
-                .unwrap();
-            controller.initiate_action_feeding();
-            controller.basis = TnuaBuiltinWalk {
-                desired_motion: direction,
-                ..default()
-            };
+            app.world_mut().get_mut::<Bouncer>(player).unwrap().desired = direction * SPRINT_SPEED;
             app.update();
         }
     }
 
     #[test]
-    fn walking_moves_the_character_at_roughly_the_configured_speed() {
+    fn travelling_moves_the_character_at_roughly_the_asked_for_speed() {
         let (mut app, player) = harness(2.0);
         settle(&mut app, 180);
 
         let start = app.world().get::<Transform>(player).unwrap().translation;
         let ticks = 128;
-        walk(&mut app, player, Vec3::NEG_Z, ticks);
+        walk(&mut app, player, Vec2::NEG_Y, ticks);
         let end = app.world().get::<Transform>(player).unwrap().translation;
 
         let travelled = (end - start).with_y(0.0).length();
         let seconds = ticks as f32 / 64.0;
-        // Allow for the acceleration ramp at the start.
+        // Allow for the acceleration ramp at the start, and for the reduced
+        // authority a bouncing body has while it is off the ground.
         let expected = SPRINT_SPEED * seconds;
         assert!(
             travelled > expected * 0.7,
-            "walked only {travelled:.2}m in {seconds:.2}s, expected near {expected:.2}m"
+            "covered only {travelled:.2}m in {seconds:.2}s, expected near {expected:.2}m"
         );
         assert!(
             (end.z - start.z) < -1.0,
@@ -306,16 +284,17 @@ mod tests {
     }
 
     #[test]
-    fn player_stays_put_once_settled() {
+    fn a_player_left_alone_stays_where_they_are() {
+        // Bouncing on the spot must not wander. A body that drifts while nobody
+        // is touching it walks itself into the traffic over a minute.
         let (mut app, player) = harness(2.0);
         settle(&mut app, 240);
-        let before = height_of(&app, player);
-        settle(&mut app, 120);
-        let after = height_of(&app, player);
-
+        let before = app.world().get::<Transform>(player).unwrap().translation;
+        settle(&mut app, 240);
+        let after = app.world().get::<Transform>(player).unwrap().translation;
         assert!(
-            (after - before).abs() < 0.02,
-            "character drifted from {before} to {after} while standing still"
+            (after.xz() - before.xz()).length() < 0.3,
+            "drifted from {before:?} to {after:?} while standing still"
         );
     }
 }
