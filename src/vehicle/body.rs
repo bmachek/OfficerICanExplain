@@ -501,6 +501,9 @@ const GREENHOUSE: [Cut; 7] = [
 /// only has to beat the depth buffer.
 const SEAL: f32 = 0.006;
 
+/// How much smaller than the glazing the cabin liner is built.
+const LINER: f32 = 0.985;
+
 /// The three lofts for one archetype.
 ///
 /// Arches need three or four sections each rather than one: a single raised
@@ -881,6 +884,27 @@ fn split_creases(mut mesh: Mesh, degrees: f32) -> Mesh {
     mesh
 }
 
+/// Turns a closed mesh into a view of its own inside.
+///
+/// The winding is reversed and the normals recomputed from it, so the surface
+/// that survives backface culling is the *far* one and it is lit as though it
+/// faced the viewer. That is what a cabin liner is: look in through a
+/// windscreen and you should see the back of the car, not the street beyond it.
+///
+/// Done in the geometry rather than with the material's `cull_mode`, which
+/// expresses the same thing and left the liner invisible on the deferred path.
+/// A car you can see straight through is not a subtle failure, and the
+/// screenshot that found it is the reason this is geometry now.
+pub fn inside_out(mut mesh: Mesh) -> Mesh {
+    if let Some(Indices::U32(indices)) = mesh.indices_mut() {
+        for triangle in indices.as_chunks_mut::<3>().0 {
+            triangle.swap(1, 2);
+        }
+    }
+    mesh.compute_smooth_normals();
+    mesh
+}
+
 /// Pushes a dent into a body panel.
 ///
 /// `from` is the direction the blow arrived along, in body space. The dent is
@@ -931,6 +955,8 @@ pub struct BodyMeshes {
     pub frame: Option<Mesh>,
     /// Glazing lying on the shell, for a cab with no greenhouse.
     pub windows: Option<Mesh>,
+    /// The cabin, seen from inside it.
+    pub liner: Option<Mesh>,
 }
 
 pub fn build(class: VehicleClass, spec: &VehicleSpec) -> BodyMeshes {
@@ -945,6 +971,10 @@ pub fn build(class: VehicleClass, spec: &VehicleSpec) -> BodyMeshes {
         ),
         lower: loft(&profile.lower, scale, None),
         cabin: (!profile.cabin.is_empty()).then(|| loft(&profile.cabin, scale, None)),
+        // A shade smaller than the glazing so the two never fight over the
+        // depth buffer, and inside out so only its far wall is drawn.
+        liner: (!profile.cabin.is_empty())
+            .then(|| inside_out(loft(&profile.cabin, scale * LINER, None))),
         frame: (!profile.cabin.is_empty())
             .then(|| panels(&profile.cabin, &GREENHOUSE, scale, None, SEAL)),
         // The van's glass lies *on* its bodywork rather than in a hole cut

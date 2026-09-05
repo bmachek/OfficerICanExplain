@@ -37,6 +37,9 @@ pub struct TrimKit {
     pub mirror: Handle<StandardMaterial>,
 }
 
+/// Outer radius of the steering wheel mesh, before it is scaled to a cabin.
+const WHEEL_RADIUS: f32 = 0.163;
+
 /// A car's inside is lit by whatever daylight gets past its own glass, which is
 /// very little. The number has to stand for the albedo of the trim *and* for
 /// that fraction at once, because the fragment is shaded by the same sun as the
@@ -47,18 +50,11 @@ const CABIN_DARK: f32 = 0.030;
 pub fn build_kit(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> TrimKit {
     TrimKit {
         block: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        wheel: meshes.add(Torus::new(0.145, 0.163)),
+        wheel: meshes.add(Torus::new(WHEEL_RADIUS * 0.89, WHEEL_RADIUS)),
         pipe: meshes.add(Cylinder::new(0.5, 1.0)),
         liner: materials.add(StandardMaterial {
             base_color: Color::srgb(CABIN_DARK, CABIN_DARK, CABIN_DARK * 1.08),
             perceptual_roughness: 0.94,
-            // The liner is the cabin loft worn inside out: only its far wall is
-            // drawn, so what you see through the near glass is the back of the
-            // car rather than the road behind it. Front faces culled instead of
-            // back, and the normals flipped to match, or the whole interior
-            // shades as though the sun were inside it.
-            cull_mode: Some(bevy::render::render_resource::Face::Front),
-            double_sided: true,
             ..default()
         }),
         upholstery: materials.add(StandardMaterial {
@@ -204,24 +200,27 @@ fn station(section: &Section, scale: Vec3, up: f32) -> (f32, f32, f32) {
     ((section.at * 2.0 - 1.0) * scale.z, y, x)
 }
 
-/// A dashboard, seats and a wheel, hung inside the glass.
+/// One thing inside a cabin: where it is, and how big.
+pub struct Fitment {
+    pub at: Vec3,
+    pub size: Vec3,
+}
+
+/// A dashboard, seats and a wheel, laid out inside the glass.
 ///
-/// Placed from the greenhouse rather than from the collider, because the
-/// greenhouse is what you look through: a seat back positioned off the box
-/// would be right on a saloon and buried in the floor of a wedge.
-pub fn furnish(
-    parent: &mut RelatedSpawnerCommands<ChildOf>,
-    kit: &TrimKit,
-    class: VehicleClass,
-    spec: &VehicleSpec,
-) {
+/// Pure, and separate from the spawning, because the invariant that matters is
+/// geometric: everything in here has to fit under the roof it is being put
+/// under. Sized in metres it did not — the first render of this had four black
+/// head restraints standing in the open air above a wedge's roofline — and that
+/// is a thing a test can check and a type cannot.
+pub fn interior(class: VehicleClass, spec: &VehicleSpec) -> Vec<Fitment> {
     let profile = profile(class);
-    let Some(&front) = profile.cabin.first() else {
-        // A van's cab is inside its one volume, and its glazing is opaque; there
-        // is nothing to see in there to furnish.
-        return;
-    };
     let cabin = &profile.cabin;
+    let Some(&front) = cabin.first() else {
+        // A van's cab is inside its one volume and its glazing is opaque; there
+        // is nothing to see in there to furnish.
+        return Vec::new();
+    };
     let scale = spec.half_extents * Vec3::new(super::body::BODY_INSET, 1.0, 1.0);
 
     let back = cabin[cabin.len() - 1];
@@ -230,51 +229,85 @@ pub fn furnish(
         (back.at * 2.0 - 1.0) * scale.z,
     );
     let floor = cabin.iter().map(|s| s.bottom).fold(f32::MAX, f32::min) * scale.y;
+    let roof = cabin.iter().map(|s| s.top).fold(f32::MIN, f32::max) * scale.y;
     let width = cabin.iter().map(|s| s.half_width).fold(0.0, f32::max) * scale.x;
+    // Everything is a fraction of the headroom rather than a measurement in
+    // metres, so a seat that fits a saloon also fits a wedge.
+    let headroom = roof - floor;
 
     let seat_x = width * 0.44;
-    let seat = Vec3::new(width * 0.52, 0.46, 0.10);
-    // Driver on the kerb-side of the centreline, which is the opposite side to
-    // the one the traffic keeps.
-    let driver = if RIGHT_HAND_TRAFFIC { -seat_x } else { seat_x };
+    let seat = Vec3::new(width * 0.52, headroom * SEAT, 0.10);
+    let restraint = headroom * RESTRAINT;
+    let mut inside = Vec::new();
 
-    let mut upholster = |at: Vec3, size: Vec3| {
-        parent.spawn((
-            Mesh3d(kit.block.clone()),
-            MeshMaterial3d(kit.upholstery.clone()),
-            Transform::from_translation(at).with_scale(size),
-        ));
-    };
-
-    for row in [0.34f32, 0.74] {
+    for row in ROWS {
         let z = nose.lerp(tail, row);
         for side in [-seat_x, seat_x] {
-            upholster(Vec3::new(side, floor + seat.y * 0.5, z), seat);
+            inside.push(Fitment {
+                at: Vec3::new(side, floor + seat.y * 0.5, z),
+                size: seat,
+            });
             // The head restraint. Small, and the single strongest cue that
             // there is an inside at all: it is the one thing in a car that
             // breaks the line of the glass from outside.
-            upholster(
-                Vec3::new(side, floor + seat.y + 0.055, z + 0.01),
-                Vec3::new(seat.x * 0.52, 0.13, 0.085),
-            );
+            inside.push(Fitment {
+                at: Vec3::new(side, floor + seat.y + restraint * 0.5, z + 0.01),
+                size: Vec3::new(seat.x * 0.52, restraint, 0.085),
+            });
         }
     }
 
     // Dashboard, filling the width under the screen.
     let dash = nose.lerp(tail, 0.16);
-    upholster(
-        Vec3::new(0.0, floor + 0.14, dash),
-        Vec3::new(width * 1.7, 0.22, 0.26),
-    );
+    inside.push(Fitment {
+        at: Vec3::new(0.0, floor + headroom * 0.20, dash),
+        size: Vec3::new(width * 1.7, headroom * 0.34, 0.26),
+    });
 
+    // The wheel, on the kerb side of the centreline — the opposite side to the
+    // one the traffic keeps.
+    let driver = if RIGHT_HAND_TRAFFIC { -seat_x } else { seat_x };
+    let rim = headroom * 0.20;
+    inside.push(Fitment {
+        at: Vec3::new(driver, floor + headroom * 0.42, dash + 0.20),
+        size: Vec3::splat(rim * 2.0),
+    });
+    inside
+}
+
+/// Seat back and head restraint, as fractions of the cabin's headroom.
+const SEAT: f32 = 0.50;
+const RESTRAINT: f32 = 0.15;
+/// Where the rows sit, as fractions of the cabin's length.
+const ROWS: [f32; 2] = [0.34, 0.68];
+
+/// Spawns what [`interior`] laid out.
+pub fn furnish(
+    parent: &mut RelatedSpawnerCommands<ChildOf>,
+    kit: &TrimKit,
+    class: VehicleClass,
+    spec: &VehicleSpec,
+) {
+    let inside = interior(class, spec);
+    let Some((wheel, boxes)) = inside.split_last() else {
+        return;
+    };
+    for fitment in boxes {
+        parent.spawn((
+            Mesh3d(kit.block.clone()),
+            MeshMaterial3d(kit.upholstery.clone()),
+            Transform::from_translation(fitment.at).with_scale(fitment.size),
+        ));
+    }
     parent.spawn((
         Mesh3d(kit.wheel.clone()),
         MeshMaterial3d(kit.upholstery.clone()),
-        Transform::from_xyz(driver, floor + 0.30, dash + 0.20)
+        Transform::from_translation(wheel.at)
             // Laid back the way a wheel is, rather than standing upright like a
             // ship's helm. The torus is built in the XZ plane, so it starts flat
             // and is stood up from there.
-            .with_rotation(Quat::from_rotation_x(1.20)),
+            .with_rotation(Quat::from_rotation_x(1.20))
+            .with_scale(Vec3::splat(wheel.size.y * 0.5 / WHEEL_RADIUS)),
     ));
 }
 
@@ -437,6 +470,54 @@ mod tests {
                 f.grille_half.x
             );
         }
+    }
+
+    #[test]
+    fn nothing_inside_a_car_pokes_out_through_its_roof() {
+        // This is the screenshot bug written down. Sized in metres, the seats
+        // and head restraints stood clear of the glass on every archetype with
+        // a low cabin, and read as roll hoops on an open-topped car.
+        for class in VehicleClass::ALL {
+            let spec = class.spec();
+            let profile = profile(class);
+            if profile.cabin.is_empty() {
+                continue;
+            }
+            let scale = spec.half_extents * Vec3::new(super::super::body::BODY_INSET, 1.0, 1.0);
+            let cabin = &profile.cabin;
+            let (nose, tail) = (cabin[0].at, cabin[cabin.len() - 1].at);
+
+            for fitment in interior(class, &spec) {
+                // The roof over this fitment, not the highest roof anywhere:
+                // a rear seat has a backlight above it, not the middle of the
+                // roof panel.
+                let along = ((fitment.at.z / scale.z + 1.0) * 0.5).clamp(nose, tail);
+                let over = super::super::body::section_where(cabin, along);
+                let ceiling = over.top * scale.y;
+                let top = fitment.at.y + fitment.size.y * 0.5;
+                assert!(
+                    top < ceiling,
+                    "{}: something inside reaches {top:.3}m, through a roof at {ceiling:.3}m",
+                    spec.display_name
+                );
+                // Nothing is asserted downwards. The greenhouse's own floor is
+                // buried in the shell — the car's real floor is most of a metre
+                // below it — so a seat base a centimetre under the glass line
+                // is inside the bodywork and cannot be seen from anywhere.
+                let flank = over.half_width * scale.x;
+                assert!(
+                    fitment.at.x.abs() + fitment.size.x * 0.5 < flank + 1e-3,
+                    "{}: something inside reaches out through the door",
+                    spec.display_name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_van_has_nothing_inside_it_to_see() {
+        // Its glazing is opaque, so anything put in there is invisible work.
+        assert!(interior(VehicleClass::Truck, &VehicleClass::Truck.spec()).is_empty());
     }
 
     #[test]

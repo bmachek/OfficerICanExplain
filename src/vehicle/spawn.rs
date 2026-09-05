@@ -50,6 +50,9 @@ struct BodyHandles {
     frame: Option<Handle<Mesh>>,
     /// Glazing lying on the shell, which is how a van gets a windscreen.
     windows: Option<Handle<Mesh>>,
+    /// The cabin seen from within, which is what stops the glazing being a
+    /// window onto the street on the far side of the car.
+    liner: Option<Handle<Mesh>>,
 }
 
 #[derive(Resource)]
@@ -81,13 +84,6 @@ impl VehicleAssets {
 /// Fraction of its own radius that a tyre is wide.
 const TYRE_WIDTH: f32 = 0.66;
 
-/// How far inside the glass the cabin liner sits.
-///
-/// A centimetre and a half on a saloon. Enough that the two surfaces cannot
-/// fight over the depth buffer, small enough that the liner does not read as a
-/// second, smaller car parked inside the first.
-const GLASS_GAP: f32 = 0.985;
-
 pub fn build_assets(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
@@ -108,6 +104,7 @@ pub fn build_assets(
                     cabin: built.cabin.map(&mut add),
                     frame: built.frame.map(&mut add),
                     windows: built.windows.map(&mut add),
+                    liner: built.liner.map(&mut add),
                 },
             )
         })
@@ -137,12 +134,17 @@ pub fn build_assets(
             metallic: 1.0,
             ..default()
         }),
-        glass: materials.add(glazing(0.52)),
+        glass: materials.add(glazing(0.70)),
         // Opaque, and the alpha is the only difference: a van's windscreen is
         // lying on the front of the box rather than set into a hole in it, so
         // what is behind it is not a cab but the outside of the bodywork.
         dark_glass: materials.add(StandardMaterial {
             alpha_mode: AlphaMode::Opaque,
+            // Duller than a car's, and the reason is the same as the opacity:
+            // at a windscreen's own roughness an opaque pane lying on a van's
+            // raked nose is a mirror pointed at the sky, and comes back as a
+            // bright panel indistinguishable from the bodywork around it.
+            perceptual_roughness: 0.24,
             ..glazing(1.0)
         }),
         trim: super::trim::build_kit(meshes, materials),
@@ -250,18 +252,19 @@ pub fn spawn_vehicle(
                 MeshMaterial3d(assets.glass.clone()),
                 Transform::IDENTITY,
             ));
-            // The inside, which is the same loft worn inside out. Without it the
-            // near glass is transparent, the far glass is culled, and you see
-            // the street straight through the car.
+        }
+        // The inside: the same loft, built a shade smaller and wound inside
+        // out. Without it the near glass is transparent, the far glass is
+        // culled, and you see the street straight through the car.
+        if let Some(liner) = &body.liner {
             parent.spawn((
-                Mesh3d(cabin.clone()),
+                Mesh3d(liner.clone()),
                 MeshMaterial3d(assets.trim.liner.clone()),
-                Transform::from_scale(Vec3::splat(GLASS_GAP)),
+                Transform::IDENTITY,
                 // The greenhouse's shadow is cast by its glass — tinted glass
-                // does cast one, and the glass is the outer surface. The liner
-                // is drawn back-faces-only, so a shadow map filled from it
-                // would record the far wall of the cabin and let the sun in
-                // through the roof.
+                // does cast one, and the glass is the outer surface. A shadow
+                // map filled from an inside-out liner would record the far wall
+                // of the cabin and let the sun in through the roof.
                 bevy::light::NotShadowCaster,
             ));
             super::trim::furnish(parent, &assets.trim, class, &fitted);
