@@ -53,7 +53,7 @@ const EXIT_OFFSETS: [Vec3; 7] = [
 /// the view inside the other car, and the screen goes black with no way out.
 ///
 /// So try the offsets in order and take the first one that is actually empty.
-fn clear_spot(spatial: &SpatialQuery, car: &Transform, ignore: [Entity; 2]) -> Vec3 {
+pub fn clear_spot(spatial: &SpatialQuery, car: &Transform, ignore: [Entity; 2]) -> Vec3 {
     // A shade under the real capsule: brushing a wall should not read as being
     // buried in it.
     let probe = Collider::capsule(CAPSULE_RADIUS * 0.9, CAPSULE_LENGTH);
