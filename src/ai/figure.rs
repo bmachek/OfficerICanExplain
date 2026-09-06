@@ -66,13 +66,42 @@ impl Limb {
 #[derive(Component)]
 pub struct Head;
 
-/// Where a part of a figure sits when the body is at its natural height.
+/// Skin, of which a flummi has exactly two patches: its hands.
+///
+/// Marked for the same reason the head is. A flummi's complexion is its mood —
+/// it goes red with the face — and skin-toned hands under an emoji head read as
+/// a bug rather than as a person.
+#[derive(Component)]
+pub struct Bare;
+
+/// How a part of a figure sits when the body is at its natural height.
 ///
 /// Held per part rather than looked up from the part's kind, so that posing a
-/// figure is one query over its children instead of a match with a arm for
+/// figure is one query over its children instead of a match with an arm for
 /// every piece of anatomy.
+///
+/// A scale as well as a position, because one part is not a unit shape: the
+/// hair is a flattened sphere, and the squash multiplies this rather than
+/// replacing it. Without that the cap is round again at the bottom of every
+/// hop, which is a head growing a bubble sixty times a second.
 #[derive(Component, Clone, Copy)]
-pub struct Rest(pub Vec3);
+pub struct Rest {
+    pub at: Vec3,
+    pub scale: Vec3,
+}
+
+impl Rest {
+    pub fn at(at: Vec3) -> Self {
+        Self {
+            at,
+            scale: Vec3::ONE,
+        }
+    }
+
+    pub fn posed(at: Vec3, scale: Vec3) -> Self {
+        Self { at, scale }
+    }
+}
 
 /// How far through a stride this figure is, and how fast it is covering ground.
 ///
@@ -94,7 +123,6 @@ pub struct FigureAssets {
     hand: Handle<Mesh>,
     hair: Handle<Mesh>,
     shoe: Handle<Mesh>,
-    skin: Vec<Handle<StandardMaterial>>,
     trousers: Vec<Handle<StandardMaterial>>,
     hair_colours: Vec<Handle<StandardMaterial>>,
     leather: Handle<StandardMaterial>,
@@ -187,21 +215,18 @@ pub fn build_assets(
         perceptual_roughness: 0.88,
         ..default()
     };
-    // Skin is not cloth. At 0.88 a face is as matte as a wool coat and takes no
-    // highlight at all, which is most of why a figure reads as a mannequin —
-    // real skin is closer to a half-gloss, with an oily sheen on the forehead
-    // and nose that a sphere cannot describe but a roughness can hint at.
-    let skin = |color: Color| StandardMaterial {
-        base_color: color,
-        perceptual_roughness: 0.52,
-        // Slightly above the dielectric default, because skin is wet.
-        reflectance: 0.55,
-        ..default()
-    };
+    // Skin is not cloth — at a wool coat's roughness a face takes no highlight
+    // at all and reads as a mannequin — but no skin is mixed here any more.
+    // Every uncovered part of a flummi is its complexion, which is its mood,
+    // and both the head and the hands take their material from
+    // `crate::mood::face` for that reason.
 
     FigureAssets {
         torso: meshes.add(Cuboid::new(0.36, body::TORSO_HEIGHT, 0.22)),
-        head: meshes.add(Sphere::new(body::HEAD_RADIUS)),
+        // A UV sphere rather than the default icosphere: the face is painted
+        // into a texture, and an icosphere's seams run wherever they like.
+        // See `crate::mood::face::head_mesh` for why it is turned on its side.
+        head: meshes.add(crate::mood::face::head_mesh(body::HEAD_RADIUS)),
         arm: meshes.add(Capsule3d {
             radius: 0.058,
             half_length: body::ARM_LENGTH * 0.5 - 0.058,
@@ -213,15 +238,6 @@ pub fn build_assets(
         hand: meshes.add(Sphere::new(body::HAND_RADIUS)),
         hair: meshes.add(Sphere::new(body::HAIR_RADIUS)),
         shoe: meshes.add(Cuboid::new(0.105, body::SHOE_HEIGHT, body::SHOE_LENGTH)),
-        skin: [
-            Color::srgb(0.76, 0.60, 0.48),
-            Color::srgb(0.58, 0.42, 0.32),
-            Color::srgb(0.38, 0.26, 0.19),
-            Color::srgb(0.86, 0.72, 0.60),
-        ]
-        .into_iter()
-        .map(|color| materials.add(skin(color)))
-        .collect(),
         hair_colours: [
             Color::srgb(0.07, 0.06, 0.06),
             Color::srgb(0.19, 0.13, 0.09),
@@ -251,13 +267,17 @@ pub fn build_assets(
 }
 
 /// Hangs a figure off an entity that already has its collider and behaviour.
+///
+/// The face and the complexion arrive already chosen, because which ones they
+/// are depends on how the figure feels — see [`crate::mood::face::Worn`].
+/// Nobody in this city has a skin tone; every head is an emoji.
 pub fn dress(
     entity: &mut EntityCommands,
     assets: &FigureAssets,
     coat: Handle<StandardMaterial>,
+    worn: &crate::mood::face::Worn,
     rng: &mut ChaCha8Rng,
 ) {
-    let skin = assets.skin[rng.random_range(0..assets.skin.len())].clone();
     let trousers = assets.trousers[rng.random_range(0..assets.trousers.len())].clone();
     let hair = assets.hair_colours[rng.random_range(0..assets.hair_colours.len())].clone();
 
@@ -265,7 +285,7 @@ pub fn dress(
     entity.with_children(|parent| {
         let torso = Vec3::new(0.0, body::TORSO_CENTRE, 0.0);
         parent.spawn((
-            Rest(torso),
+            Rest::at(torso),
             Mesh3d(assets.torso.clone()),
             MeshMaterial3d(coat.clone()),
             Transform::from_translation(torso),
@@ -273,9 +293,9 @@ pub fn dress(
         let head = Vec3::new(0.0, body::HEAD_CENTRE, 0.0);
         parent.spawn((
             Head,
-            Rest(head),
+            Rest::at(head),
             Mesh3d(assets.head.clone()),
-            MeshMaterial3d(skin.clone()),
+            MeshMaterial3d(worn.face.clone()),
             Transform::from_translation(head),
         ));
         // A shade wider than the head and sat a little high and a little back,
@@ -284,12 +304,13 @@ pub fn dress(
         // still fit inside the collider — but at the distance a pedestrian is
         // seen it is the dark top to the silhouette that does the work, not
         // where exactly it starts.
+        let cap = Vec3::new(0.0, body::HEAD_CENTRE + body::HAIR_RISE, 0.018);
+        let flattened = Vec3::new(1.0, body::HAIR_FLATTEN, 1.0);
         parent.spawn((
-            Torso,
+            Rest::posed(cap, flattened),
             Mesh3d(assets.hair.clone()),
             MeshMaterial3d(hair.clone()),
-            Transform::from_xyz(0.0, body::HEAD_CENTRE + body::HAIR_RISE, 0.018)
-                .with_scale(Vec3::new(1.0, body::HAIR_FLATTEN, 1.0)),
+            Transform::from_translation(cap).with_scale(flattened),
         ));
 
         for (limb, side) in [(Limb::LeftArm, -1.0f32), (Limb::RightArm, 1.0)] {
@@ -297,7 +318,7 @@ pub fn dress(
             parent
                 .spawn((
                     limb,
-                    Rest(joint),
+                    Rest::at(joint),
                     Transform::from_translation(joint),
                     Visibility::default(),
                 ))
@@ -314,8 +335,9 @@ pub fn dress(
                     // and it swings with the arm because it hangs off the
                     // same joint.
                     joint.spawn((
+                        Bare,
                         Mesh3d(assets.hand.clone()),
-                        MeshMaterial3d(skin.clone()),
+                        MeshMaterial3d(worn.bare.clone()),
                         Transform::from_xyz(0.0, -body::ARM_LENGTH, 0.0),
                     ));
                 });
@@ -326,7 +348,7 @@ pub fn dress(
             parent
                 .spawn((
                     limb,
-                    Rest(joint),
+                    Rest::at(joint),
                     Transform::from_translation(joint),
                     Visibility::default(),
                 ))
@@ -392,8 +414,8 @@ pub fn animate(
             };
             // The rest pose scaled by the squash, so parts stay attached to one
             // another as the body flattens instead of pulling apart at the neck.
-            transform.translation = rest.0 * pose;
-            transform.scale = pose;
+            transform.translation = rest.at * pose;
+            transform.scale = rest.scale * pose;
             if let Some(limb) = limb {
                 transform.rotation = Quat::from_rotation_x(limb_angle(*limb, cycle.phase));
             }

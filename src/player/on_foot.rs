@@ -19,6 +19,8 @@ use leafwing_input_manager::prelude::ActionState;
 
 use crate::bounce::controller::{Bouncer, JUMP_SCALE};
 use crate::core::schedule::GameSet;
+use crate::mood::face::FaceLevel;
+use crate::mood::feeling::{Mood, Temperament};
 use crate::player::camera::CameraRig;
 use crate::player::input::Action;
 use crate::world::City;
@@ -56,6 +58,7 @@ fn spawn_player(
     city: Res<City>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     figures: Res<crate::ai::figure::FigureAssets>,
+    faces: Res<crate::mood::face::FaceAssets>,
 ) {
     // Start on an actual street rather than at the origin, which is usually
     // inside a downtown block.
@@ -64,6 +67,9 @@ fn spawn_player(
         .nearest_node(Vec2::ZERO)
         .map(|id| city.graph.node(id).pos)
         .unwrap_or(Vec2::ZERO);
+
+    let temper = Temperament::ordinary();
+    let worn = faces.wear(temper.baseline);
 
     let mut player = commands.spawn((
         Name::new("Player"),
@@ -76,6 +82,12 @@ fn spawn_player(
         // off when somebody is thrown, which is when tumbling is the point.
         LockedAxes::ROTATION_LOCKED,
         Bouncer::new(STAND_HEIGHT),
+        // An ordinary citizen rather than a special case, so that the player's
+        // own face sours in a bad-tempered crowd and cheers up in a good one.
+        // Being subject to the mood is what makes it a toy rather than a gauge.
+        temper,
+        Mood::new(temper.baseline),
+        FaceLevel(worn.level),
         // The player carries the input map; everything else reads ActionState.
         Action::default_input_map(),
     ));
@@ -88,7 +100,7 @@ fn spawn_player(
         ..default()
     });
     let mut rng = crate::core::rng::stream_for(0, crate::core::rng::stream::PEDESTRIANS);
-    crate::ai::figure::dress(&mut player, &figures, coat, &mut rng);
+    crate::ai::figure::dress(&mut player, &figures, coat, &worn, &mut rng);
 }
 
 fn drive_player(

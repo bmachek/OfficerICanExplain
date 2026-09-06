@@ -31,6 +31,11 @@ pub mod stream {
     /// Manholes, patches, stains and rubber. Separate again, for the same
     /// reason: a street's wear must not depend on how many trees are on it.
     pub const WEAR: u64 = 11;
+    /// Temperaments. Its own stream for the usual reason, sharpened: the crowd
+    /// is drawn from `PEDESTRIANS`, so taking their tempers from the same
+    /// stream would mean that giving somebody a shorter fuse also moves where
+    /// the next pedestrian spawns and which street they walk down.
+    pub const MOOD: u64 = 12;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

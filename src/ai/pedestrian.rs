@@ -26,6 +26,8 @@ use crate::bounce::controller::{Bouncer, Launched};
 use crate::core::config::GameConfig;
 use crate::core::rng::{stream, stream_for};
 use crate::core::schedule::GameSet;
+use crate::mood::face::{FaceAssets, FaceLevel};
+use crate::mood::feeling::{Mood, MoodRng, Temperament};
 use crate::player::on_foot::Player;
 use crate::world::City;
 use crate::world::buildings::SIDEWALK_HEIGHT;
@@ -151,7 +153,9 @@ fn maintain_population(
     city: Res<City>,
     assets: Res<PedestrianAssets>,
     figures: Res<super::figure::FigureAssets>,
+    faces: Res<FaceAssets>,
     mut rng: ResMut<PedestrianRng>,
+    mut tempers: ResMut<MoodRng>,
     players: Query<&Transform, With<Player>>,
     pedestrians: Query<(Entity, &Transform), With<Pedestrian>>,
 ) {
@@ -207,6 +211,13 @@ fn maintain_population(
         let position = pavement_point(a, b, edge.width, side, t);
         let material = assets.clothes[rng.0.random_range(0..assets.clothes.len())].clone();
 
+        // Drawn from its own stream: a citizen's disposition must not depend on
+        // how many of them have been spawned already, and retuning the mix must
+        // not move anybody's route.
+        let temper = Temperament::draw(&mut tempers.0);
+        let mood = temper.baseline;
+        let worn = faces.wear(mood);
+
         let mut person = commands.spawn((
             Name::new("Pedestrian"),
             Pedestrian {
@@ -225,9 +236,12 @@ fn maintain_population(
             // this off for as long as they are tumbling.
             LockedAxes::ROTATION_LOCKED,
             Bouncer::new(STAND_HEIGHT),
+            temper,
+            Mood::new(mood),
+            FaceLevel(worn.level),
             Visibility::default(),
         ));
-        super::figure::dress(&mut person, &figures, material, &mut rng.0);
+        super::figure::dress(&mut person, &figures, material, &worn, &mut rng.0);
         alive += 1;
     }
 }

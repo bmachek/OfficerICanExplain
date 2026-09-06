@@ -16,6 +16,8 @@ pub struct GameConfig {
     pub world: WorldConfig,
     /// How much of a rubber ball everything in this city is.
     pub bounce: BounceConfig,
+    /// How quick this city's temper is.
+    pub mood: MoodConfig,
     pub camera: CameraConfig,
     pub audio: AudioConfig,
     /// What the renderer is allowed to spend. Resolved from a single quality
@@ -75,6 +77,34 @@ pub struct BounceConfig {
     pub squash: f32,
 }
 
+/// How the city feels, and how fast it changes its mind.
+///
+/// Only the numbers that are shared between subsystems live here. A single
+/// flummi's disposition is its [`crate::mood::feeling::Temperament`], because that
+/// varies from one citizen to the next and a global dial cannot express "most
+/// people are fine, one in ten is a menace".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoodConfig {
+    /// How far a mood carries to the neighbours, in metres.
+    ///
+    /// Roughly the width of a street. Wider and the whole city moves as one
+    /// block, which is a single mood rather than a crowd of them.
+    pub contagion_radius: f32,
+    /// How fast a flummi is pulled towards the mood around it, per second at
+    /// full susceptibility.
+    pub contagion_rate: f32,
+    /// Velocity lost in a knock, in m/s, up to which it reads as a friendly
+    /// bop rather than as an insult. The joke lives on this line: the same
+    /// nudge delights one flummi and starts a feud with the next.
+    pub bop_limit: f32,
+    /// And the loss that makes the worst impression anybody can make. Harder
+    /// knocks than this exist; they are no more insulting.
+    pub outrage_limit: f32,
+    /// Mood below which a flummi counts as having gone red. What the rage-wave
+    /// readout in the HUD counts crossings of.
+    pub rage_line: f32,
+}
+
 /// The mixer. Three numbers rather than one, because the background bed and
 /// the things that happen in front of it want independent control.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +156,13 @@ impl Default for GameConfig {
                 ground_accel: 42.0,
                 air_accel: 22.0,
                 squash: 0.35,
+            },
+            mood: MoodConfig {
+                contagion_radius: 9.0,
+                contagion_rate: 0.9,
+                bop_limit: 6.5,
+                outrage_limit: 18.0,
+                rage_line: -0.5,
             },
             camera: CameraConfig {
                 speed: 25.0,

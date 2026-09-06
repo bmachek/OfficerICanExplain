@@ -16,6 +16,7 @@
 //!   cargo run -- --screenshot shots/city.png --frames 120
 //!   cargo run -- --screenshot shots/city.png --quality ultra --fps-log
 //!   cargo run -- --screenshot shots/city.png --hour 21.5 --cover 1 --wet 0.9
+//!   cargo run -- --screenshot shots/faces.png --at-node 300 --eye 1.4 --mood -1
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -84,6 +85,13 @@ pub struct CaptureRequest {
     /// being able to put two tiers side by side in the same framing, and that
     /// needs the choice on the command line rather than in a config file.
     pub quality: QualityPreset,
+    /// Holds every face in the city at this mood, −1 to 1.
+    ///
+    /// The faces are the one thing in the game that cannot be shot by finding
+    /// the right corner to stand on: a city in a mood is a city that has to be
+    /// *put* in one first. This forces it, so the whole ladder of faces can be
+    /// photographed from the same spot in three runs.
+    pub mood: Option<f32>,
     /// Logs frame times over the warmup run alongside the capture.
     ///
     /// A screenshot proves a change looks right; it says nothing about whether
@@ -169,6 +177,7 @@ pub fn parse_args() -> Option<CaptureRequest> {
         cover: value_of("--cover")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0.18),
+        mood: value_of("--mood").and_then(|v| v.parse().ok()),
         quality: crate::render::preset_from_arg(value_of("--quality").as_deref()),
         fps_log: args.iter().any(|a| a == "--fps-log"),
         follow: args.iter().any(|a| a == "--follow"),

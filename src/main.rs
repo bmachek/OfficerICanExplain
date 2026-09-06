@@ -25,6 +25,7 @@ mod ai;
 mod audio;
 mod bounce;
 mod core;
+mod mood;
 mod player;
 mod render;
 mod save;
@@ -66,6 +67,7 @@ fn main() {
             crate::ai::AiPlugin,
             crate::audio::AudioPlugin,
             crate::bounce::BouncePlugin,
+            crate::mood::MoodPlugin,
             crate::save::SavePlugin,
             crate::player::PlayerPlugin,
             crate::render::RenderPlugin,
