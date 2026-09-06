@@ -436,7 +436,7 @@ pub fn spawn_parked_vehicles(
     for edge in city.graph.edges() {
         // Not every segment, or the city reads as a car park — but often
         // enough that there is always one within a short walk, because a crime
-        // sandbox where you cannot find a car is not a crime sandbox.
+        // sandbox where you cannot find a car is not much of a sandbox.
         if rng.random_range(0.0..1.0) > 0.62 {
             continue;
         }

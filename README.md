@@ -1,4 +1,6 @@
-# Boing! — Die Stadt der Flummis
+# Mood Swings — Die Stadt der Flummis
+
+[![CI](https://github.com/bmachek/OfficerICanExplain/actions/workflows/ci.yml/badge.svg)](https://github.com/bmachek/OfficerICanExplain/actions/workflows/ci.yml)
 
 An open-world sandbox about being rude to strangers, built in Rust with Bevy.
 
