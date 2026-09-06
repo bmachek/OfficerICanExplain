@@ -60,6 +60,8 @@ const SPIN_RATE: f32 = 2.2;
 const BUMP_RANGE: f32 = 7.0;
 /// Chance per second of a delighted flummi starting one.
 const DELIGHT: f32 = 0.5;
+/// How fast it wanders over to do it, in m/s.
+const BUMP_SPEED: f32 = 2.6;
 
 /// Somebody this flummi is cross with, and how much longer it cares.
 #[derive(Component, Debug)]
@@ -84,7 +86,7 @@ impl Plugin for GrudgePlugin {
             Update,
             (
                 (take_offence, blame_the_nearest, take_delight),
-                (pursue, spin),
+                (pursue, spin, drift_towards_company),
                 settle_scores,
             )
                 .chain()
@@ -245,15 +247,20 @@ fn pursue(
     }
 }
 
-/// And spins the delighted, steering them gently into company.
+/// Spins the delighted on the spot.
+///
+/// Split from [`drift_towards_company`] purely because of what a query may
+/// borrow: turning a dancer needs `&mut Transform`, and finding the neighbour
+/// it is dancing at needs to read *every* `Transform` including the dancers'.
+/// One system cannot hold both, and the split is a better answer than a
+/// `ParamSet` here because the two halves genuinely are two jobs.
 fn spin(
     mut commands: Commands,
     time: Res<Time>,
-    targets: Query<&Transform>,
-    mut dancers: Query<(Entity, &mut Transform, &mut Bouncer, &mut Pirouette), Without<Launched>>,
+    mut dancers: Query<(Entity, &mut Transform, &mut Pirouette), Without<Launched>>,
 ) {
     let dt = time.delta_secs();
-    for (entity, mut transform, mut bouncer, mut spin) in &mut dancers {
+    for (entity, mut transform, mut spin) in &mut dancers {
         spin.left -= dt;
         if spin.left <= 0.0 {
             commands.entity(entity).remove::<Pirouette>();
@@ -263,16 +270,24 @@ fn spin(
         // for: the crowd's own facing is set by `walk_pavements` earlier in the
         // same set, and rotation is locked so the solver will not touch it.
         transform.rotate_y(std::f32::consts::TAU * SPIN_RATE * dt);
+    }
+}
 
-        if let Some(friend) = spin.towards
-            && let Ok(at) = targets.get(friend)
-        {
-            let towards = (at.translation - transform.translation).with_y(0.0);
-            // Slower than a chase. The difference between being bumped into by
-            // somebody in a good mood and being rammed by somebody in a bad one
-            // has to be legible from across the street.
-            bouncer.desired = towards.normalize_or_zero().xz() * 2.6;
-        }
+/// And steers them gently into company.
+fn drift_towards_company(
+    targets: Query<&Transform>,
+    mut dancers: Query<(&Transform, &mut Bouncer, &Pirouette), Without<Launched>>,
+) {
+    for (transform, mut bouncer, spin) in &mut dancers {
+        let Some(friend) = spin.towards else { continue };
+        let Ok(at) = targets.get(friend) else {
+            continue;
+        };
+        let towards = (at.translation - transform.translation).with_y(0.0);
+        // Slower than a chase. The difference between being bumped into by
+        // somebody in a good mood and being rammed by somebody in a bad one has
+        // to be legible from across the street.
+        bouncer.desired = towards.normalize_or_zero().xz() * BUMP_SPEED;
     }
 }
 
@@ -379,7 +394,7 @@ mod tests {
         // The three ways of being knocked about have to be tellable apart at a
         // glance, which means keeping them in order.
         let ram = crate::core::config::GameConfig::default().mood.grudge_speed;
-        assert!(ram > 2.6, "a ram is no faster than a friendly bump");
+        assert!(ram > BUMP_SPEED, "a ram is no faster than a friendly bump");
         assert!(
             ram < crate::ai::pedestrian::FLEE_SPEED + 1.0,
             "being chased has to be survivable on foot"

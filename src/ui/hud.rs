@@ -5,6 +5,10 @@
 //! the city feels. It is shown three ways — the player's own face, their own
 //! mood, and the average of everyone resident — because the joke is the gap
 //! between them. A delighted face in a furious street is funnier than either.
+//!
+//! The words on screen are German, matching `ui::menu`. Everything a player
+//! reads is; everything a developer reads — the dev panel, the logs, the code
+//! itself — is English.
 
 use bevy::prelude::*;
 use bevy::text::FontSize;
@@ -190,9 +194,9 @@ fn spawn_hud(mut commands: Commands, minimap: Res<MinimapImage>, faces: Res<Face
                                 ..default()
                             },
                             children![
-                                label("You", 12.0, INK, Caption),
+                                label("Du", 12.0, INK, Caption),
                                 bar(FLAT, Meter::Own),
-                                label("The city", 12.0, INK, Caption),
+                                label("Die Stadt", 12.0, INK, Caption),
                                 bar(FLAT, Meter::City),
                             ],
                         ),
@@ -264,7 +268,7 @@ fn show_the_mood(
         for &child in children {
             if let Ok(mut text) = shouts.get_mut(child) {
                 let count = city.wave_size;
-                **text = format!("Rage wave! {count} citizens");
+                **text = format!("Wut-Welle! {count} Bürger");
             }
         }
     }

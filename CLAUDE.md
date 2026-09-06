@@ -145,6 +145,8 @@ declaration order.
 - Comments here explain *why*, often at length, and frequently record what was
   tried and rejected. Match that: a change that reverses a documented decision
   should update the comment that documents it.
+- Player-facing text is German (`ui::menu`, `ui::hud`); everything a developer
+  reads — the dev panel, log lines, identifiers, comments — is English.
 - Crate-level lints in `main.rs` allow `dead_code` (foundations land a milestone
   before their callers), `clippy::type_complexity` and `clippy::too_many_arguments`
   (Bevy query filters and system params are the meaning). Clippy must otherwise

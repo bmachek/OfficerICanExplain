@@ -426,8 +426,9 @@ pub fn wear_the_mood(
     mut parts: Query<(
         &mut MeshMaterial3d<StandardMaterial>,
         Option<&crate::ai::figure::Head>,
+        Option<&crate::ai::figure::Bare>,
     )>,
-    hands: Query<&Children>,
+    joints: Query<&Children>,
 ) {
     for (mood, mut level, children) in figures {
         let next = level_of(mood.value);
@@ -437,19 +438,28 @@ pub fn wear_the_mood(
         level.0 = next;
         let face = faces.material(next);
         let bare = faces.bare(next);
+
         for &child in children {
-            if let Ok((mut material, head)) = parts.get_mut(child) {
+            if let Ok((mut material, head, skin)) = parts.get_mut(child) {
                 if head.is_some() {
                     material.0 = face.clone();
+                } else if skin.is_some() {
+                    material.0 = bare.clone();
                 }
                 continue;
             }
-            // The hands hang off a shoulder joint rather than off the body, so
-            // that they swing with the arm. That puts them one level deeper
-            // than everything else the mood has to reach.
-            let Ok(limb) = hands.get(child) else { continue };
+            // A hand hangs off the shoulder joint rather than off the body, so
+            // that it swings with the arm — which puts it one level deeper than
+            // everything else the mood has to reach. Only the parts marked
+            // `Bare` are touched down here: the sleeve hanging off the same
+            // joint is a coat and stays one.
+            let Ok(limb) = joints.get(child) else {
+                continue;
+            };
             for &part in limb {
-                if let Ok((mut material, _)) = parts.get_mut(part) {
+                if let Ok((mut material, _, skin)) = parts.get_mut(part)
+                    && skin.is_some()
+                {
                     material.0 = bare.clone();
                 }
             }
