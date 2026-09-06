@@ -89,9 +89,11 @@ pub fn stride(mood: f32) -> f32 {
 
 /// And in how high it bounces: delight literally puts a spring in the step,
 /// a bad mood flattens the hop into a stomp. Clamped at the low end so
-/// nobody's walk cycle collapses into a shuffle along the ground.
-pub fn spring(mood: f32) -> f32 {
-    (1.0 + 0.35 * mood).clamp(0.85, 1.35)
+/// nobody's walk cycle collapses into a shuffle along the ground; the top
+/// comes from `BounceConfig::npc_spring_max`, because the crowd is where the
+/// game's bounce lives now that the player's own hop is dialled down.
+pub fn spring(mood: f32, max: f32) -> f32 {
+    (1.0 + 0.5 * mood).clamp(0.85, max)
 }
 
 #[derive(Component)]
@@ -310,6 +312,7 @@ fn walk_pavements(
     time: Res<Time>,
     mut report: Local<f32>,
     city: Res<City>,
+    config: Res<GameConfig>,
     mut rng: ResMut<PedestrianRng>,
     vehicles: Query<(&Transform, &LinearVelocity), With<crate::vehicle::spawn::Vehicle>>,
     mut pedestrians: Query<
@@ -391,7 +394,7 @@ fn walk_pavements(
         // The mood is in the body as well as on the face: the hop the bounce
         // controller takes at the bottom of every arc is scaled here, every
         // frame, because the controller spends the scale on each landing.
-        bouncer.hop_scale = spring(mood.value);
+        bouncer.hop_scale = spring(mood.value, config.bounce.npc_spring_max);
 
         pedestrian.current_speed = if heading == Vec2::ZERO { 0.0 } else { speed };
         // Asked for rather than applied. The bounce controller owns the body's
@@ -473,12 +476,23 @@ mod tests {
 
     #[test]
     fn delight_puts_a_spring_in_the_step_and_a_sulk_flattens_it() {
-        assert!(spring(1.0) > 1.2);
-        assert!(spring(-1.0) < 1.0);
-        assert_eq!(spring(0.0), 1.0);
+        let max = GameConfig::default().bounce.npc_spring_max;
+        assert!(spring(1.0, max) > 1.2);
+        assert!(spring(-1.0, max) < 1.0);
+        assert_eq!(spring(0.0, max), 1.0);
         // Flattened, not grounded: the hop is the walk cycle's clock, and a
         // scale near zero would leave a miserable flummi twitching in place.
-        assert!(spring(-1.0) >= 0.85);
+        assert!(spring(-1.0, max) >= 0.85);
+        // The config ceiling must actually be reachable, or the dial is dead.
+        assert_eq!(spring(1.0, max), max);
+    }
+
+    #[test]
+    fn the_player_hops_lower_than_any_citizen() {
+        let bounce = GameConfig::default().bounce;
+        // The whole crowd out-bounces the player, even a flummi in the depths
+        // of a sulk — the camera rides the player's hop, nobody else's.
+        assert!(bounce.player_hop_scale < spring(-1.0, bounce.npc_spring_max));
     }
 
     #[test]

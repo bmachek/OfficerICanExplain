@@ -2,10 +2,17 @@
 # Fetches the optional scanned/recorded assets: PBR materials and sounds.
 #
 # Everything here is CC0 1.0 — public domain, no attribution required, no
-# restrictions on use. That licence is the reason these specific sets were
-# chosen: the game ships them without owing anybody anything. Materials come
-# from ambientCG (https://ambientcg.com), sounds from OpenGameArt
-# (https://opengameart.org).
+# restrictions on use. The project is FOSS and any licence-compatible source
+# would do (CC-BY with credit included), but so far every sound worth having
+# has turned up under CC0, so the stronger guarantee is kept while it costs
+# nothing. Materials come from ambientCG (https://ambientcg.com), sounds from
+# OpenGameArt (https://opengameart.org) and Freesound (https://freesound.org).
+#
+# The freesound.org entries point at cdn previews (128kbps mp3) rather than
+# the originals, because original downloads sit behind a login and the
+# previews do not. The licence is the sound's licence either way, and the
+# bank remixes everything to mono at its own rate on load, so the transcode
+# is not the bottleneck.
 #
 # The download lands in assets/materials/ and assets/sounds/, both gitignored.
 # The game runs without either: `world::texture` generates a procedural
@@ -75,12 +82,14 @@ done
 #
 # One entry per sound bank name (see `audio::bank`): "<name>|<url>". The file
 # keeps its source extension; `audio::files` tries wav/flac/ogg/mp3 in turn.
-# Sounds with no good CC0 recording simply have no entry here and stay
-# synthesised — the fallback is per sound. That is currently the screech, the
-# spoken flummi voices (instruments by design, see `audio::bank`), and three
-# mouth noises nobody has recorded under CC0 yet: raspberry, fart and sorry.
-# The bank loads all three by name the moment a file appears, so a recording
-# dropped into assets/sounds/ by hand works without touching this script.
+# Sounds with no entry here stay synthesised — the fallback is per sound, and
+# `audio::files` says so in the log at startup. That is currently the screech
+# (deliberately synth: it has to track slip continuously), the spoken flummi
+# voices (instruments by design, see `audio::bank`), and the three mouth
+# noises nobody has recorded under a compatible licence yet: raspberry, fart
+# and sorry. The bank loads each by name the moment a file appears, so a
+# recording dropped into assets/sounds/ by hand works without touching this
+# script.
 SOUNDS_DEST="assets/sounds"
 SOUNDS=(
     "boing|https://opengameart.org/sites/default/files/boing.flac"
@@ -91,6 +100,17 @@ SOUNDS=(
     "birdsong|https://opengameart.org/sites/default/files/park_ambience_birds.wav"
     "spray|https://opengameart.org/sites/default/files/park_ambience_river.wav"
     "uproar|https://opengameart.org/sites/default/files/crowd_shouting_0.ogg"
+    # The cheer, whistled by actual people (all CC0): elle-trudgett's
+    # innocent whistle, elijahgoodson's tune, Willygoat's calm one. Three
+    # takes because one whistle repeated is a doorbell — see `audio::bank`.
+    "whistle-0|https://cdn.freesound.org/previews/146/146887_197046-hq.mp3"
+    "whistle-1|https://cdn.freesound.org/previews/411/411578_7994683-hq.mp3"
+    "whistle-2|https://cdn.freesound.org/previews/411/411062_7963328-hq.mp3"
+    # An actual ACME swanee whistle sliding up (v0idation, CC0), for the arc
+    # through the air; and a jaw-harp twang (magnuswaker, CC0) for a street
+    # prop leaving its bolts.
+    "wheee|https://cdn.freesound.org/previews/497/497092_942821-hq.mp3"
+    "sproing|https://cdn.freesound.org/previews/540/540790_11537497-hq.mp3"
 )
 # These two live inside one zip (qubodup's CC0 car pack): "<name>|<member>".
 CAR_PACK_URL="https://opengameart.org/sites/default/files/car_sound_effects_pack.zip"
@@ -105,6 +125,14 @@ CREATURE_PACK_URL="https://opengameart.org/sites/default/files/80-CC0-creature-S
 CREATURE_PACK=(
     "cough|cough_03.ogg"
     "spit|spit_01.ogg"
+)
+# Footsteps and the traffic bed, from rubberduck's second CC0 SFX hundred.
+# The highway loop *is* the city ambience: what the mood mixer wants from
+# `ambience` is anonymous distant traffic, which is exactly this.
+SFX100_PACK_URL="https://opengameart.org/sites/default/files/sfx_100_v2.zip"
+SFX100_PACK=(
+    "footstep|sfx100v2_footstep_01.ogg"
+    "ambience|sfx100v2_loop_highway.ogg"
 )
 
 mkdir -p "$SOUNDS_DEST"
@@ -158,6 +186,28 @@ if [[ "$need_pack" == true ]]; then
     pack="$(mktemp -t creaturepack.XXXXXX).zip"
     if curl -fsSL --retry 3 --retry-delay 2 -o "$pack" "$CREATURE_PACK_URL"; then
         for entry in "${CREATURE_PACK[@]}"; do
+            name="${entry%%|*}"
+            member="${entry#*|}"
+            unzip -qop "$pack" "$member" > "$SOUNDS_DEST/$name.${member##*.}"
+        done
+    else
+        echo "        failed; skipping (the game synthesises them instead)" >&2
+    fi
+    rm -f "$pack"
+fi
+
+# And once more for the SFX hundred (same bash-3.2 duplication as above).
+need_pack=false
+for entry in "${SFX100_PACK[@]}"; do
+    name="${entry%%|*}"
+    member="${entry#*|}"
+    [[ -f "$SOUNDS_DEST/$name.${member##*.}" && "$force" == false ]] || need_pack=true
+done
+if [[ "$need_pack" == true ]]; then
+    echo "fetch   sfx hundred pack"
+    pack="$(mktemp -t sfx100pack.XXXXXX).zip"
+    if curl -fsSL --retry 3 --retry-delay 2 -o "$pack" "$SFX100_PACK_URL"; then
+        for entry in "${SFX100_PACK[@]}"; do
             name="${entry%%|*}"
             member="${entry#*|}"
             unzip -qop "$pack" "$member" > "$SOUNDS_DEST/$name.${member##*.}"

@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 
 use crate::core::schedule::GameSet;
+use crate::core::states::{AppState, InGameState};
 
 use crate::player::input::Action;
 use crate::player::on_foot::{CAPSULE_LENGTH, CAPSULE_RADIUS, Player};
@@ -83,10 +84,21 @@ impl Plugin for InteractPlugin {
                 enter_or_exit_vehicle,
                 eject_from_wrecked_vehicle,
                 carry_driver,
-                drive_from_input,
             )
                 .chain()
                 .in_set(GameSet::Simulation),
+        )
+        // Not in the Update chain with the rest: `RunFixedMainLoop` runs
+        // *before* `Update`, so controls written there used to reach
+        // `drive_vehicles` one frame late — a full frame of steering latency
+        // on top of the physics tick. Writing them just before the fixed loop
+        // hands the controller this frame's keys. The state gate mirrors what
+        // `GameSet::Simulation` would have provided.
+        .add_systems(
+            RunFixedMainLoop,
+            drive_from_input
+                .in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop)
+                .run_if(in_state(AppState::InGame).and_then(in_state(InGameState::Playing))),
         );
     }
 }

@@ -34,10 +34,18 @@ const EXTENSIONS: [&str; 4] = ["wav", "flac", "ogg", "mp3"];
 /// does not decode — the caller synthesises instead, and a corrupt download
 /// must never stop the game from starting.
 fn decode(dir: &Path, name: &str) -> Option<Vec<f32>> {
-    let path = EXTENSIONS
+    let Some(path) = EXTENSIONS
         .iter()
         .map(|ext| dir.join(format!("{name}.{ext}")))
-        .find(|path| path.is_file())?;
+        .find(|path| path.is_file())
+    else {
+        // Absence is fine — the fetch script is optional — but *silent*
+        // absence made the synthesised fallbacks read as missing files. One
+        // line per absent sound at startup makes the gap legible in the log
+        // next to the "using recorded" lines the loaded ones print.
+        info!("no recording for {name} in assets/sounds/; synthesising");
+        return None;
+    };
 
     let file = std::fs::File::open(&path).ok()?;
     let decoder = match rodio::Decoder::try_from(file) {
@@ -108,6 +116,14 @@ pub fn one_shot(dir: &Path, name: &str, peak: f32) -> Option<SynthSound> {
     Some(SynthSound::new(out))
 }
 
+/// One recorded take of a many-voiced one-shot: `<name>-<take>.<ext>`, held
+/// to the same rules as `one_shot`. The fallback stays per *take*, so a bank
+/// entry with three takes can run with one recording and two synthesised
+/// siblings until the other files turn up.
+pub fn one_shot_take(dir: &Path, name: &str, take: usize, peak: f32) -> Option<SynthSound> {
+    one_shot(dir, &format!("{name}-{take}"), peak)
+}
+
 /// A recorded loop, seam-wrapped so it repeats without a click. The recording
 /// loses its last tenth of a second to the crossfade, which no loop misses.
 pub fn looping(dir: &Path, name: &str, peak: f32) -> Option<SynthSound> {
@@ -148,5 +164,6 @@ mod tests {
         let nowhere = Path::new("/definitely/not/a/directory");
         assert!(one_shot(nowhere, "boing", 0.8).is_none());
         assert!(looping(nowhere, "engine", 0.8).is_none());
+        assert!(one_shot_take(nowhere, "whistle", 0, 0.55).is_none());
     }
 }

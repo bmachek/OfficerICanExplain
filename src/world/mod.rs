@@ -35,7 +35,13 @@ impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         let bounce = app.world().resource::<GameConfig>().bounce.clone();
         app.add_plugins((
-            PhysicsPlugins::default(),
+            // `interpolate_all`: physics ticks at 64Hz while frames come at
+            // whatever vsync grants, and without easing every body's rendered
+            // pose is a stair-step held for 0, 1 or 2 ticks per frame — which
+            // reads as lag, most of all on the car the camera is bolted to.
+            // Interpolation costs one tick (~16ms) of visual latency, which
+            // nothing in a game without aiming will ever notice.
+            PhysicsPlugins::default().set(PhysicsInterpolationPlugin::interpolate_all()),
             material::MaterialLibraryPlugin,
             facade::FacadePlugin,
             road::RoadPlugin,

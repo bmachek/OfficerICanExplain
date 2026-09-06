@@ -208,15 +208,26 @@ fn auto_follow(
     // reversing, so backing off a kerb does not whip the view round the boot
     // and back. On foot there is no reliable heading — the capsule's rotation
     // is locked so the body never turns — so travel is read off the velocity.
-    let (heading, speed, ease) = match driving.and_then(|d| vehicles.get(d.0).ok()) {
+    // Driving swings hard and almost immediately: at the old ease of 1.0 the
+    // view took the better part of two seconds to find "behind" after a
+    // corner, so every corner was driven blind and cornering read as broken.
+    // On foot the lazy swing stays — a stroll does not need the view snapping
+    // about — and so does the full look delay.
+    let (heading, speed, ease, delay) = match driving.and_then(|d| vehicles.get(d.0).ok()) {
         Some((car, car_velocity)) => (
             car.forward().as_vec3(),
             car_velocity.0.with_y(0.0).length(),
-            1.0,
+            3.0,
+            0.15,
         ),
         None => {
             let flat = velocity.0.with_y(0.0);
-            (flat, flat.length(), ON_FOOT_EASE)
+            (
+                flat,
+                flat.length(),
+                ON_FOOT_EASE,
+                config.camera.auto_follow_delay,
+            )
         }
     };
     let target = Dir3::new(heading.with_y(0.0))
@@ -231,7 +242,7 @@ fn auto_follow(
             rig.since_look + time.delta_secs()
         };
 
-        if rig.mode != CameraMode::Follow || rig.since_look < config.camera.auto_follow_delay {
+        if rig.mode != CameraMode::Follow || rig.since_look < delay {
             continue;
         }
         let Some(target) = target else { continue };
@@ -289,8 +300,13 @@ fn free_fly(
 fn follow_player(
     time: Res<Time>,
     spatial: SpatialQuery,
-    players: Query<(&GlobalTransform, Option<&Driving>), With<Player>>,
-    vehicles: Query<&GlobalTransform, Without<Player>>,
+    // `Transform`, not `GlobalTransform`: both targets are root entities so
+    // the two agree — except that `GlobalTransform` is only propagated in
+    // `PostUpdate`, i.e. it is last frame's pose by the time this runs, and it
+    // never sees the physics interpolation easing. Reading the stale one put
+    // the camera a frame behind the car it was aimed at.
+    players: Query<(&Transform, Option<&Driving>), (With<Player>, Without<CameraRig>)>,
+    vehicles: Query<&Transform, (Without<Player>, Without<CameraRig>)>,
     mut rigs: Query<(&mut Transform, &CameraRig, Entity)>,
 ) {
     let Ok((player, driving)) = players.single() else {
@@ -300,8 +316,8 @@ fn follow_player(
     // Sit further back and higher behind a car; the same framing that works for
     // a person on foot is uselessly tight at 100km/h.
     let (focus, pull_back) = match driving.and_then(|d| vehicles.get(d.0).ok()) {
-        Some(vehicle) => (vehicle.translation() + Vec3::Y * 1.1, 1.9),
-        None => (player.translation(), 1.0),
+        Some(vehicle) => (vehicle.translation + Vec3::Y * 1.1, 1.9),
+        None => (player.translation, 1.0),
     };
     let target = focus + Vec3::Y * SHOULDER_HEIGHT;
 
@@ -325,9 +341,16 @@ fn follow_player(
         }
 
         let desired = target + offset * distance;
-        // Exponential smoothing, framerate independent.
+        // Exponential smoothing, framerate independent. The vertical axis is
+        // deliberately lazier: at 18/s the camera rode the player's hop
+        // nearly 1:1, and a viewport that bobs with every step is most of
+        // what made the player feel "too bouncy" — the citizens hop just as
+        // much and read as charming, because nobody's view is glued to them.
         let blend = 1.0 - (-18.0 * time.delta_secs()).exp();
-        transform.translation = transform.translation.lerp(desired, blend);
+        let vertical = 1.0 - (-6.0 * time.delta_secs()).exp();
+        let eased = transform.translation.lerp(desired, blend);
+        let height = transform.translation.y + (desired.y - transform.translation.y) * vertical;
+        transform.translation = Vec3::new(eased.x, height, eased.z);
         transform.rotation = rotation;
     }
 }

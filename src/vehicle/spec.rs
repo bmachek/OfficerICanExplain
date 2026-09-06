@@ -89,7 +89,10 @@ pub struct VehicleSpec {
 
     // --- steering ---
     pub max_steer: f32,
-    /// How fast the steering angle chases the input, in 1/s.
+    /// How fast the steering angle chases the input, in 1/s. The felt lag is
+    /// roughly 2/rate to settle: 13 → ~150ms, which reads as direct with
+    /// digital keys. The first round of values (5.5–10) read as towing a
+    /// caravan — every class was raised once players called it laggy.
     pub steer_rate: f32,
     /// Fraction of steering lock still available at top speed.
     pub high_speed_steer: f32,
@@ -167,7 +170,7 @@ impl VehicleSpec {
             drag: 3.2,
             downforce: 9.0,
             max_steer: 0.56,
-            steer_rate: 8.0,
+            steer_rate: 13.0,
             high_speed_steer: 0.40,
             front_grip: 1.60,
             rear_grip: 1.45,
@@ -202,7 +205,7 @@ impl VehicleSpec {
             drag: 3.4,
             downforce: 7.0,
             max_steer: 0.50,
-            steer_rate: 6.5,
+            steer_rate: 11.0,
             high_speed_steer: 0.36,
             front_grip: 1.55,
             // Well under the front: this is a car that leaves in a cloud of
@@ -237,7 +240,7 @@ impl VehicleSpec {
             drag: 2.6,
             downforce: 16.0,
             max_steer: 0.60,
-            steer_rate: 10.0,
+            steer_rate: 15.0,
             high_speed_steer: 0.34,
             front_grip: 1.85,
             rear_grip: 1.62,
@@ -272,7 +275,7 @@ impl VehicleSpec {
             drag: 4.4,
             downforce: 6.0,
             max_steer: 0.50,
-            steer_rate: 6.5,
+            steer_rate: 10.0,
             high_speed_steer: 0.46,
             front_grip: 1.46,
             // An empty bed over the driven axle is the reason a pickup steps
@@ -307,7 +310,7 @@ impl VehicleSpec {
             drag: 5.5,
             downforce: 5.0,
             max_steer: 0.46,
-            steer_rate: 5.5,
+            steer_rate: 8.0,
             high_speed_steer: 0.50,
             front_grip: 1.40,
             rear_grip: 1.34,
