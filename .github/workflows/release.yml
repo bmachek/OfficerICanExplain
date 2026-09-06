@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Dispatch builds the archives and stops there — useful for rehearsing the
+  # packaging without minting a release.
+  workflow_dispatch:
+
+# Uploading release assets needs more than the default read-only token.
+permissions:
+  contents: write
+
+# Two tags racing would interleave their uploads into one draft. Queue, don't
+# cancel: a cancelled release build wastes an hour of LTO.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  version:
+    # A tag that disagrees with Cargo.toml ships a binary that reports the
+    # wrong version. Catch that here, before the hour of LTO, not after.
+    name: tag matches Cargo.toml
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compare versions
+        run: |
+          crate="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [[ "$crate" != "$tag" ]]; then
+            echo "tag v$tag but Cargo.toml says $crate" >&2
+            exit 1
+          fi
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: [version]
+    # `needs` would otherwise skip this job whenever `version` is skipped,
+    # which is exactly the workflow_dispatch case.
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          # Cross-compiled from the arm64 runner; the Xcode toolchain there
+          # links both architectures, so no Intel runner is needed.
+          - os: macos-latest
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Bevy links ALSA and libudev on Linux; neither is on the runner image.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Default features only. `dev` (dynamic linking) must never ship, and
+      # `raytracing`/`dlss` stay opt-in builds for the people who ask for them.
+      - run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # The archive mirrors the source tree's layout because that is what the
+      # game expects at runtime: `core::assets::root()` finds `assets/` next to
+      # the executable, and the fetch script resolves paths from its own
+      # location under `tools/`, so the optional CC0 upgrade works in place.
+      # Only the shaders are checked in; materials and sounds are generated at
+      # startup or fetched by the player, never shipped.
+      - name: Package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME}"
+          [[ "${GITHUB_REF}" == refs/tags/* ]] || version="dev-${GITHUB_SHA::7}"
+          pkg="mood-swings-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$pkg/assets" "dist/$pkg/tools"
+          cp -R assets/shaders "dist/$pkg/assets/"
+          cp README.md "dist/$pkg/"
+          if [[ "${{ runner.os }}" == Windows ]]; then
+            cp "target/${{ matrix.target }}/release/mood_swings.exe" "dist/$pkg/"
+            cp tools/fetch-materials.bat "dist/$pkg/tools/"
+            (cd dist && 7z a -bso0 "$pkg.zip" "$pkg")
+          else
+            cp "target/${{ matrix.target }}/release/mood_swings" "dist/$pkg/"
+            cp tools/fetch-materials.sh "dist/$pkg/tools/"
+            tar czf "dist/$pkg.tar.gz" -C dist "$pkg"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mood-swings-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    # One job creates the release after every platform built, so a broken
+    # Windows link never leaves a half-populated release page.
+    name: draft release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      # Draft on purpose: the generated notes get a once-over and the publish
+      # button is the human sign-off.
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
