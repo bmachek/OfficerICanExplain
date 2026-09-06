@@ -53,6 +53,47 @@ pub const FLEE_SPEED: f32 = 5.4;
 const SCARE_RADIUS: f32 = 14.0;
 const SCARE_SPEED: f32 = 6.0;
 
+/// Pace multiplier at the angry end of the scale: a Wutbürger at rock bottom
+/// storms down the pavement half again as fast as they would stroll it.
+const STORM_PACE: f32 = 1.5;
+/// And at the bottom of an ordinary sulk: dragging the feet.
+const TRUDGE_PACE: f32 = 0.78;
+/// Mood below which a sulk stops slowing somebody down and starts driving
+/// them: the same corner of the scale the rage line and the spontaneous
+/// taunt live in.
+const STORMING: f32 = -0.5;
+/// How much a good mood lengthens the stride. Deliberately smaller than the
+/// angry end — contentment is a stroll, not a hurry.
+const STROLL_LIFT: f32 = 0.18;
+
+/// How a flummi feels shows in how it walks, not just on its face.
+///
+/// Multiplier on the walking pace. Piecewise on purpose, because the angry
+/// half of the scale is two different bodies: a mild sulk *slows* somebody
+/// down — feet dragged, nowhere worth being — and past [`STORMING`] the same
+/// scale flips into pace, which is what makes a genuinely furious flummi
+/// legible from across the street before it ever taunts anybody. The happy
+/// side is one gentle lift; delight lives in the hop, not the stride.
+pub fn stride(mood: f32) -> f32 {
+    let mood = mood.clamp(-1.0, 1.0);
+    if mood <= STORMING {
+        let past = (mood - STORMING) / (-1.0 - STORMING);
+        TRUDGE_PACE + (STORM_PACE - TRUDGE_PACE) * past
+    } else if mood < 0.0 {
+        let into = mood / STORMING;
+        1.0 + (TRUDGE_PACE - 1.0) * into
+    } else {
+        1.0 + STROLL_LIFT * mood
+    }
+}
+
+/// And in how high it bounces: delight literally puts a spring in the step,
+/// a bad mood flattens the hop into a stomp. Clamped at the low end so
+/// nobody's walk cycle collapses into a shuffle along the ground.
+pub fn spring(mood: f32) -> f32 {
+    (1.0 + 0.35 * mood).clamp(0.85, 1.35)
+}
+
 #[derive(Component)]
 pub struct Pedestrian {
     pub from: NodeId,
@@ -272,7 +313,7 @@ fn walk_pavements(
     mut rng: ResMut<PedestrianRng>,
     vehicles: Query<(&Transform, &LinearVelocity), With<crate::vehicle::spawn::Vehicle>>,
     mut pedestrians: Query<
-        (&mut Pedestrian, &mut Bouncer, &mut Transform),
+        (&mut Pedestrian, &mut Bouncer, &mut Transform, &Mood),
         (Without<crate::vehicle::spawn::Vehicle>, Without<Launched>),
     >,
 ) {
@@ -292,7 +333,7 @@ fn walk_pavements(
     }
     let mut sample = None;
 
-    for (mut pedestrian, mut bouncer, mut transform) in &mut pedestrians {
+    for (mut pedestrian, mut bouncer, mut transform, mood) in &mut pedestrians {
         let position = transform.translation.xz();
         let a = city.graph.node(pedestrian.from).pos;
         let b = city.graph.node(pedestrian.to).pos;
@@ -342,10 +383,15 @@ fn walk_pavements(
         }
 
         let speed = if pedestrian.panic > 0.0 {
+            // Panic overrides temperament: a trudge does not outrun a car.
             FLEE_SPEED
         } else {
-            pedestrian.speed.min(WALK_SPEED * 1.3)
+            pedestrian.speed.min(WALK_SPEED * 1.3) * stride(mood.value)
         };
+        // The mood is in the body as well as on the face: the hop the bounce
+        // controller takes at the bottom of every arc is scaled here, every
+        // frame, because the controller spends the scale on each landing.
+        bouncer.hop_scale = spring(mood.value);
 
         pedestrian.current_speed = if heading == Vec2::ZERO { 0.0 } else { speed };
         // Asked for rather than applied. The bounce controller owns the body's
@@ -394,6 +440,46 @@ impl<I: Iterator> ChooseExt for I {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_mood_is_legible_in_the_walk() {
+        // A sulk drags the feet, a proper rage storms, and delight strolls a
+        // shade quicker — the readout the face gives at arm's length, the walk
+        // has to give from across the street.
+        assert!(stride(-0.3) < 1.0, "a sulk should slow somebody down");
+        assert!(stride(-1.0) > 1.2, "a Wutbürger at the bottom should storm");
+        assert_eq!(stride(0.0), 1.0);
+        assert!(stride(0.8) > 1.0);
+        // The turn from trudge to storm is a corner, not a cliff: a mood
+        // easing past the line must not visibly snap gears.
+        assert!(
+            (stride(STORMING - 1e-3) - stride(STORMING + 1e-3)).abs() < 0.02,
+            "the pace jumps at the storming line"
+        );
+    }
+
+    #[test]
+    fn no_mood_walks_anybody_faster_than_a_flee_or_a_chase() {
+        // Storming is a manner, not an escape: a furious stroller must stay
+        // catchable by a grudge and slower than somebody actually running.
+        let fastest = (0..=40)
+            .map(|step| stride(-1.0 + step as f32 / 20.0))
+            .fold(0.0f32, f32::max)
+            * WALK_SPEED
+            * 1.3;
+        assert!(fastest < FLEE_SPEED);
+        assert!(fastest < GameConfig::default().mood.grudge_speed);
+    }
+
+    #[test]
+    fn delight_puts_a_spring_in_the_step_and_a_sulk_flattens_it() {
+        assert!(spring(1.0) > 1.2);
+        assert!(spring(-1.0) < 1.0);
+        assert_eq!(spring(0.0), 1.0);
+        // Flattened, not grounded: the hop is the walk cycle's clock, and a
+        // scale near zero would leave a miserable flummi twitching in place.
+        assert!(spring(-1.0) >= 0.85);
+    }
 
     #[test]
     fn pavements_sit_outside_the_carriageway() {

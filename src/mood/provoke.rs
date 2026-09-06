@@ -26,7 +26,7 @@ use rand::RngExt;
 
 use super::feeling::{Mood, Temperament};
 use crate::audio::bank::{SoundBank, VARIANTS};
-use crate::audio::{AudioRng, effect_gain, spatial_once};
+use crate::audio::{AudioRng, close_once, effect_gain, spatial_once};
 use crate::core::config::{GameConfig, MoodConfig};
 use crate::core::schedule::GameSet;
 use crate::player::input::Action;
@@ -207,6 +207,7 @@ fn player_provokes(
         &mut rng,
         at,
         kind,
+        true,
     );
 }
 
@@ -265,6 +266,7 @@ fn npcs_provoke(
             &mut rng,
             at,
             kind,
+            false,
         );
     }
 }
@@ -272,6 +274,12 @@ fn npcs_provoke(
 /// The noise and the ring. Shared by both, because a raspberry from an NPC has
 /// to look and sound exactly like one from the player or the crowd's behaviour
 /// reads as scripted rather than as the same rule applying to everybody.
+///
+/// `own` marks the player's mouth. Their raspberry happens *to* them rather
+/// than near them — the same rule the footsteps follow (see
+/// [`crate::audio::close_once`]) — so it plays flat in both ears instead of
+/// through the spatial mixer, which was quietly swallowing the player's own
+/// provocations while everybody else's carried fine.
 fn announce(
     commands: &mut Commands,
     config: &GameConfig,
@@ -281,6 +289,7 @@ fn announce(
     rng: &mut AudioRng,
     at: Vec3,
     kind: Rudeness,
+    own: bool,
 ) {
     if let Some(bank) = bank {
         let sound = match kind {
@@ -293,10 +302,14 @@ fn announce(
             }
             Rudeness::Cheer => bank.whistle[rng.random_range(0..VARIANTS)].clone(),
         };
+        let settings = if own {
+            close_once(effect_gain(config, GAIN))
+        } else {
+            spatial_once(effect_gain(config, GAIN), EARSHOT)
+        };
         commands.spawn((
             AudioPlayer(sound),
-            spatial_once(effect_gain(config, GAIN), EARSHOT)
-                .with_speed(rng.random_range(0.9..1.15)),
+            settings.with_speed(rng.random_range(0.9..1.15)),
             Transform::from_translation(at),
         ));
     }

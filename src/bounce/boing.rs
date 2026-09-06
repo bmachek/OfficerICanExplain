@@ -10,6 +10,13 @@
 //! so a threshold set too low turns the street into a bag of springs; set too
 //! high and being launched across a junction is silent. It sits just above the
 //! velocity a body loses to its own hop.
+//!
+//! The hop itself is invisible here by construction, not by threshold: the
+//! bounce controller *assigns* the rebound at the bottom of every arc, and it
+//! books that assignment into [`PreviousVelocity`] as it does so
+//! (`bounce::controller`). What this module sees is only what the world did to
+//! a body — a bumper, a wall, being thrown — never what the body did to
+//! itself, which is what keeps a jump from reading as an assault.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -124,12 +131,91 @@ fn play_boings(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bounce::controller::{Bouncer, JUMP_SCALE, bounce_bodies};
+    use bevy::asset::AssetPlugin;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
 
     #[test]
     fn an_ordinary_hop_makes_no_noise() {
         // A flummi gives back a little under 3 m/s at the bottom of every
         // bounce. If that registered, the street would be a bag of springs.
         assert_eq!(wallop_strength(2.9), 0.0);
+    }
+
+    /// Wallops seen since the last look.
+    #[derive(Resource, Default)]
+    struct Heard(usize);
+
+    fn count_wallops(mut wallops: MessageReader<Wallop>, mut heard: ResMut<Heard>) {
+        heard.0 += wallops.read().count();
+    }
+
+    #[test]
+    fn a_body_bouncing_and_jumping_under_its_own_steam_never_wallops_itself() {
+        // The rebound at the bottom of every hop is *assigned* by the bounce
+        // controller, and at 2×hop_speed per landing it is well over the
+        // wallop floor — a jump lands past the outrage limit. If the detector
+        // reads those assignments, the street boings on every step and a
+        // player makes themselves furious by jumping, which is the bug this
+        // test pins down. Only what the world does to a body may register.
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            TransformPlugin,
+            PhysicsPlugins::default(),
+        ));
+        app.init_asset::<Mesh>();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 64.0,
+        )));
+        app.init_resource::<crate::core::config::GameConfig>();
+        app.init_resource::<Heard>();
+        app.add_message::<Wallop>();
+        app.add_systems(Update, (bounce_bodies, spot_wallops, count_wallops).chain());
+
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::cuboid(200.0, 2.0, 200.0),
+            Transform::from_xyz(0.0, -1.0, 0.0),
+        ));
+        let body = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 2.0, 0.0),
+                RigidBody::Dynamic,
+                Collider::capsule(0.32, 1.05),
+                LockedAxes::ROTATION_LOCKED,
+                Bouncer::new(1.05 * 0.5 + 0.32),
+            ))
+            .id();
+        app.finish();
+        app.cleanup();
+
+        // Let the spawn drop land and the rhythm settle before counting.
+        for _ in 0..240 {
+            app.update();
+        }
+        app.world_mut().resource_mut::<Heard>().0 = 0;
+
+        // Five seconds of bouncing on the spot.
+        for _ in 0..320 {
+            app.update();
+        }
+        let hopping = app.world().resource::<Heard>().0;
+        assert_eq!(hopping, 0, "{hopping} wallops from bouncing on the spot");
+
+        // And a deliberate jump, landing included.
+        app.world_mut().get_mut::<Bouncer>(body).unwrap().hop_scale = JUMP_SCALE;
+        for _ in 0..180 {
+            app.update();
+        }
+        let jumping = app.world().resource::<Heard>().0;
+        assert_eq!(
+            jumping, 0,
+            "{jumping} wallops from a jump nobody was hit by"
+        );
     }
 
     #[test]

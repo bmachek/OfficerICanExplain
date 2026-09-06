@@ -24,6 +24,7 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
+use super::boing::PreviousVelocity;
 use crate::core::config::GameConfig;
 use crate::core::schedule::GameSet;
 
@@ -115,7 +116,16 @@ pub fn bounce_bodies(
     time: Res<Time>,
     config: Res<GameConfig>,
     spatial: SpatialQuery,
-    bodies: Query<(Entity, &Transform, &mut LinearVelocity, &mut Bouncer), Without<Launched>>,
+    bodies: Query<
+        (
+            Entity,
+            &Transform,
+            &mut LinearVelocity,
+            &mut Bouncer,
+            Option<&mut PreviousVelocity>,
+        ),
+        Without<Launched>,
+    >,
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
@@ -123,7 +133,7 @@ pub fn bounce_bodies(
     }
     let tune = &config.bounce;
 
-    for (entity, transform, mut velocity, mut bouncer) in bodies {
+    for (entity, transform, mut velocity, mut bouncer, previous) in bodies {
         // Excluding the body itself is load-bearing. An unfiltered ray started
         // above the origin hits the body's own collider first, which reads as
         // ground a body-height up — and it climbs, a metre and a half a frame.
@@ -150,7 +160,18 @@ pub fn bounce_bodies(
             bouncer.landing_speed = -velocity.y;
             bouncer.last_arc = bouncer.since_landing;
             bouncer.since_landing = 0.0;
-            velocity.y = tune.hop_speed * bouncer.hop_scale;
+            let hop = tune.hop_speed * bouncer.hop_scale;
+            // The rebound is assigned by this controller, not done to the body
+            // by the world, so it is booked into the wallop detector's memory
+            // as well. Without this every hop reads as a ~2×hop_speed knock and
+            // every jump as being hit by a car: the street boings on every
+            // step, moods shift with nobody touching anybody, and a player who
+            // jumps makes themselves furious. Only what the *solver* changes —
+            // collisions, being thrown — is left for `spot_wallops` to see.
+            if let Some(mut previous) = previous {
+                previous.0.y += hop - velocity.y;
+            }
+            velocity.y = hop;
             // A jump is asked for once and spent once; holding the key down
             // must not turn into a pogo stick to the roofline.
             bouncer.hop_scale = 1.0;
