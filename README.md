@@ -47,10 +47,16 @@ just looks worse. Nothing is checked in and nothing is required to build.
 | **M** | Full-screen map |
 | **F1** | Free-fly debug camera (hold right mouse to look) |
 | **F5 / F9** | Quick save / quick load |
+| **Escape** | Pause menu — save, load, settings, key bindings |
 
 Take your hand off the mouse and the camera swings itself in behind you — hard
 behind a car, gently on foot, and never while you are aiming or already
 steering the view yourself. Both rates are on the dev panel.
+
+Every key above except WASD and the mouse can be rebound from the pause
+menu's "Tastenbelegung" screen, along with mouse sensitivity, a Y-invert
+toggle, audio and graphics. Settings persist to `saves/options.ron`; the
+world state from a save goes to `saves/quicksave.ron`, same as before.
 
 Gamepad is mapped throughout: left stick moves, right stick looks, A jumps,
 Y interacts, right trigger fires, left trigger aims, B is the handbrake.

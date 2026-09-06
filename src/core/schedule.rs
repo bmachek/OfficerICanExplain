@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 
-use super::states::AppState;
+use super::states::{AppState, InGameState};
 
 #[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum GameSet {
@@ -40,7 +40,12 @@ impl Plugin for SchedulePlugin {
         )
         .configure_sets(
             Update,
-            (GameSet::Ai, GameSet::Simulation, GameSet::Camera).run_if(in_state(AppState::InGame)),
+            (GameSet::Ai, GameSet::Simulation, GameSet::Camera)
+                .run_if(in_state(AppState::InGame))
+                // Paused freezes the world: nothing decides, nothing moves,
+                // and the camera stops taking mouse look, which is what
+                // frees the mouse for the menu in the first place.
+                .run_if(in_state(InGameState::Playing)),
         );
     }
 }

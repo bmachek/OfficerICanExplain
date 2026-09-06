@@ -19,6 +19,7 @@ use leafwing_input_manager::prelude::ActionState;
 
 use crate::bounce::controller::{Bouncer, JUMP_SCALE};
 use crate::core::schedule::GameSet;
+use crate::core::settings::KeyBindings;
 use crate::player::camera::CameraRig;
 use crate::player::input::Action;
 use crate::world::City;
@@ -56,6 +57,7 @@ fn spawn_player(
     city: Res<City>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     figures: Res<crate::ai::figure::FigureAssets>,
+    keybindings: Res<KeyBindings>,
 ) {
     // Start on an actual street rather than at the origin, which is usually
     // inside a downtown block.
@@ -77,7 +79,7 @@ fn spawn_player(
         LockedAxes::ROTATION_LOCKED,
         Bouncer::new(STAND_HEIGHT),
         // The player carries the input map; everything else reads ActionState.
-        Action::default_input_map(),
+        Action::input_map(&keybindings),
     ));
 
     // The same figure the crowd wears, in a jacket that reads at a distance —

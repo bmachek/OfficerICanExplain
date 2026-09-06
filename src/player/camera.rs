@@ -140,13 +140,18 @@ fn orbit(
         return;
     }
     let sensitivity = config.camera.mouse_sensitivity;
+    let y_dir: f32 = if config.camera.invert_look_y {
+        -1.0
+    } else {
+        1.0
+    };
     for mut rig in &mut rigs {
         if rig.mode == CameraMode::Free && !buttons.pressed(MouseButton::Right) {
             continue;
         }
         rig.yaw -= motion.delta.x * sensitivity;
-        rig.pitch =
-            (rig.pitch - motion.delta.y * sensitivity).clamp(-FRAC_PI_2 + 0.05, FRAC_PI_2 - 0.05);
+        rig.pitch = (rig.pitch - motion.delta.y * sensitivity * y_dir)
+            .clamp(-FRAC_PI_2 + 0.05, FRAC_PI_2 - 0.05);
     }
 }
 

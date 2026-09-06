@@ -48,6 +48,57 @@ pub fn save_path() -> PathBuf {
     Path::new("saves").join("quicksave.ron")
 }
 
+/// Whether a save exists to load, so the menu can grey out "Laden" instead of
+/// letting the player click their way to an error.
+pub fn save_exists() -> bool {
+    save_path().exists()
+}
+
+/// Writes the current player position and time of day to [`save_path`].
+///
+/// Shared by the `F5` quicksave keybind and the pause menu's "Speichern"
+/// button, so there is exactly one place that knows the save format.
+pub fn write_save(
+    config: &GameConfig,
+    clock: &TimeOfDay,
+    transform: &Transform,
+) -> Result<(), String> {
+    let save = SaveGame {
+        version: SAVE_VERSION,
+        world_seed: config.world_seed,
+        player: transform.translation.to_array(),
+        hour: clock.hours,
+    };
+
+    let path = save_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    save.to_ron()
+        .map_err(|e| e.to_string())
+        .and_then(|text| std::fs::write(&path, text).map_err(|e| e.to_string()))
+}
+
+/// Reads [`save_path`] onto `clock` and `transform`. Shared by the `F9`
+/// quickload keybind and the pause menu's "Laden" button; callers that care
+/// about a missing file rather than a corrupt one should check
+/// [`save_exists`] first.
+pub fn read_save(clock: &mut TimeOfDay, transform: &mut Transform) -> Result<(), String> {
+    let path = save_path();
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let save = SaveGame::from_ron(&text).map_err(|e| e.to_string())?;
+    if !save.is_compatible() {
+        return Err(format!(
+            "Speicherstand ist Version {}, dieser Build liest Version {SAVE_VERSION}",
+            save.version
+        ));
+    }
+
+    transform.translation = Vec3::from_array(save.player);
+    clock.hours = save.hour;
+    Ok(())
+}
+
 pub struct SavePlugin;
 
 impl Plugin for SavePlugin {
@@ -68,23 +119,8 @@ fn quick_save(
         return;
     }
 
-    let save = SaveGame {
-        version: SAVE_VERSION,
-        world_seed: config.world_seed,
-        player: transform.translation.to_array(),
-        hour: clock.hours,
-    };
-
-    let path = save_path();
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    match save
-        .to_ron()
-        .map_err(|e| e.to_string())
-        .and_then(|text| std::fs::write(&path, text).map_err(|e| e.to_string()))
-    {
-        Ok(()) => info!("saved to {}", path.display()),
+    match write_save(&config, &clock, transform) {
+        Ok(()) => info!("saved to {}", save_path().display()),
         Err(error) => error!("could not save: {error}"),
     }
 }
@@ -100,30 +136,14 @@ fn quick_load(
         return;
     }
 
-    let path = save_path();
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        warn!("no save at {}", path.display());
-        return;
-    };
-    let save = match SaveGame::from_ron(&text) {
-        Ok(save) => save,
-        Err(error) => {
-            error!("save file is corrupt: {error}");
-            return;
-        }
-    };
-    if !save.is_compatible() {
-        error!(
-            "save is version {} but this build reads version {SAVE_VERSION}",
-            save.version
-        );
+    if !save_exists() {
+        warn!("no save at {}", save_path().display());
         return;
     }
-
-    transform.translation = Vec3::from_array(save.player);
-    clock.hours = save.hour;
-
-    info!("loaded from {}", path.display());
+    match read_save(&mut clock, &mut transform) {
+        Ok(()) => info!("loaded from {}", save_path().display()),
+        Err(error) => error!("could not load: {error}"),
+    }
 }
 
 #[cfg(test)]
