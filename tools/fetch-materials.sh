@@ -75,8 +75,12 @@ done
 #
 # One entry per sound bank name (see `audio::bank`): "<name>|<url>". The file
 # keeps its source extension; `audio::files` tries wav/flac/ogg/mp3 in turn.
-# Sounds with no good CC0 recording (screech, the flummi voices) simply have
-# no entry here and stay synthesised — the fallback is per sound.
+# Sounds with no good CC0 recording simply have no entry here and stay
+# synthesised — the fallback is per sound. That is currently the screech, the
+# spoken flummi voices (instruments by design, see `audio::bank`), and three
+# mouth noises nobody has recorded under CC0 yet: raspberry, fart and sorry.
+# The bank loads all three by name the moment a file appears, so a recording
+# dropped into assets/sounds/ by hand works without touching this script.
 SOUNDS_DEST="assets/sounds"
 SOUNDS=(
     "boing|https://opengameart.org/sites/default/files/boing.flac"
@@ -93,6 +97,14 @@ CAR_PACK_URL="https://opengameart.org/sites/default/files/car_sound_effects_pack
 CAR_PACK=(
     "engine|Car_Engine_Loop.ogg"
     "car-door|Car_Door_Close.ogg"
+)
+# And the taunt rotation's recordable half, from rubberduck's CC0 creature
+# pack. cough_03 is the double cough — performed, like the synthesised one —
+# and spit_01 is the closest to the synthesised length.
+CREATURE_PACK_URL="https://opengameart.org/sites/default/files/80-CC0-creature-SFX_0.zip"
+CREATURE_PACK=(
+    "cough|cough_03.ogg"
+    "spit|spit_01.ogg"
 )
 
 mkdir -p "$SOUNDS_DEST"
@@ -123,6 +135,29 @@ if [[ "$need_pack" == true ]]; then
     pack="$(mktemp -t carpack.XXXXXX).zip"
     if curl -fsSL --retry 3 --retry-delay 2 -o "$pack" "$CAR_PACK_URL"; then
         for entry in "${CAR_PACK[@]}"; do
+            name="${entry%%|*}"
+            member="${entry#*|}"
+            unzip -qop "$pack" "$member" > "$SOUNDS_DEST/$name.${member##*.}"
+        done
+    else
+        echo "        failed; skipping (the game synthesises them instead)" >&2
+    fi
+    rm -f "$pack"
+fi
+
+# The same dance for the creature pack. Duplicated rather than factored into a
+# function because macOS still ships bash 3.2, which has no array namerefs.
+need_pack=false
+for entry in "${CREATURE_PACK[@]}"; do
+    name="${entry%%|*}"
+    member="${entry#*|}"
+    [[ -f "$SOUNDS_DEST/$name.${member##*.}" && "$force" == false ]] || need_pack=true
+done
+if [[ "$need_pack" == true ]]; then
+    echo "fetch   creature sound pack"
+    pack="$(mktemp -t creaturepack.XXXXXX).zip"
+    if curl -fsSL --retry 3 --retry-delay 2 -o "$pack" "$CREATURE_PACK_URL"; then
+        for entry in "${CREATURE_PACK[@]}"; do
             name="${entry%%|*}"
             member="${entry#*|}"
             unzip -qop "$pack" "$member" > "$SOUNDS_DEST/$name.${member##*.}"

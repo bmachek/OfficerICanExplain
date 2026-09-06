@@ -66,6 +66,26 @@ if defined NEED_PACK (
     del /q "%TEMP%\carpack.zip" 2>nul
 )
 
+rem The creature pack zip — mirror of CREATURE_PACK in the .sh: the taunt
+rem rotation's recordable half. Raspberry, fart and sorry have no good CC0
+rem recording yet and stay synthesised.
+set "NEED_CREATURES="
+if not exist "%SOUNDS_DEST%\cough.ogg" set NEED_CREATURES=1
+if not exist "%SOUNDS_DEST%\spit.ogg" set NEED_CREATURES=1
+if "%FORCE%"=="--force" set NEED_CREATURES=1
+if defined NEED_CREATURES (
+    echo fetch   creature sound pack
+    curl -fsSL --retry 3 --retry-delay 2 -o "%TEMP%\creaturepack.zip" "https://opengameart.org/sites/default/files/80-CC0-creature-SFX_0.zip"
+    if not errorlevel 1 (
+        tar -xf "%TEMP%\creaturepack.zip" -C "%TEMP%" cough_03.ogg spit_01.ogg
+        move /y "%TEMP%\cough_03.ogg" "%SOUNDS_DEST%\cough.ogg" >nul
+        move /y "%TEMP%\spit_01.ogg" "%SOUNDS_DEST%\spit.ogg" >nul
+    ) else (
+        echo         failed; skipping - the game synthesises them instead 1>&2
+    )
+    del /q "%TEMP%\creaturepack.zip" 2>nul
+)
+
 echo done
 exit /b 0
 
