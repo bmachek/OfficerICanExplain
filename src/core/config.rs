@@ -24,6 +24,74 @@ pub struct GameConfig {
     /// preset and then walked back to what the GPU actually supports; see
     /// [`crate::render::quality`].
     pub graphics: GraphicsSettings,
+    /// The window itself, as opposed to what is rendered into it. Kept out of
+    /// [`GraphicsSettings`] because that block is resolved from a quality
+    /// preset and restored from saves; how big the window is belongs to the
+    /// player and the screen it sits on, not to a preset or a save game.
+    ///
+    /// `#[serde(default)]` so an options file written before this existed
+    /// still parses instead of resetting everything else in it.
+    #[serde(default)]
+    pub window: WindowConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WindowConfig {
+    /// Only meaningful in windowed mode; fullscreen takes the screen's own
+    /// size, and the settings screen greys this out accordingly.
+    pub resolution: Resolution,
+    /// Borderless fullscreen on the screen the window is currently on —
+    /// never the "exclusive" kind, which switches the display's video mode
+    /// and takes the whole desktop down with it when the game hiccups.
+    ///
+    /// `#[serde(default)]` so an options file written when the resolution
+    /// switcher was the whole of this section still parses.
+    #[serde(default)]
+    pub fullscreen: bool,
+}
+
+/// The window sizes the settings menu offers, in logical pixels — on a HiDPI
+/// screen the OS multiplies by its scale factor, the same as the size the
+/// window is opened with in `main`.
+///
+/// A fixed menu rather than a free width and height, so the options file can
+/// never ask for a size the menu could not have produced, and so the settings
+/// screen is a switch rather than two drag fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Resolution {
+    R1280x720,
+    /// The size the game has always opened at; staying the default means a
+    /// fresh install and a pre-switcher install open the same window.
+    #[default]
+    R1600x900,
+    R1920x1080,
+    R2560x1440,
+    R3840x2160,
+}
+
+impl Resolution {
+    pub const ALL: [Self; 5] = [
+        Self::R1280x720,
+        Self::R1600x900,
+        Self::R1920x1080,
+        Self::R2560x1440,
+        Self::R3840x2160,
+    ];
+
+    pub fn size(self) -> (u32, u32) {
+        match self {
+            Self::R1280x720 => (1280, 720),
+            Self::R1600x900 => (1600, 900),
+            Self::R1920x1080 => (1920, 1080),
+            Self::R2560x1440 => (2560, 1440),
+            Self::R3840x2160 => (3840, 2160),
+        }
+    }
+
+    pub fn label(self) -> String {
+        let (width, height) = self.size();
+        format!("{width} × {height}")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,6 +338,7 @@ impl Default for GameConfig {
                 ambience: 0.5,
             },
             graphics: GraphicsSettings::default(),
+            window: WindowConfig::default(),
         }
     }
 }
@@ -277,5 +346,47 @@ impl Default for GameConfig {
 impl Default for CameraConfig {
     fn default() -> Self {
         GameConfig::default().camera
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_resolution_is_the_size_main_opens_the_window_with() {
+        assert_eq!(Resolution::default().size(), (1600, 900));
+    }
+
+    #[test]
+    fn the_resolution_menu_lists_every_size_once_smallest_first() {
+        let sizes: Vec<_> = Resolution::ALL.iter().map(|r| r.size()).collect();
+        let mut sorted = sizes.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sizes, sorted);
+    }
+
+    #[test]
+    fn a_window_section_from_before_the_fullscreen_switch_still_parses() {
+        let parsed: WindowConfig =
+            ron::from_str("(resolution:R1920x1080)").expect("old window section should parse");
+        assert_eq!(parsed.resolution, Resolution::R1920x1080);
+        assert!(!parsed.fullscreen);
+    }
+
+    #[test]
+    fn an_options_file_without_a_window_section_still_parses() {
+        // What `saves/options.ron` looked like before the resolution switcher:
+        // the whole config, minus the `window` field.
+        let mut old = GameConfig::default();
+        old.audio.master = 0.42;
+        let mut text = ron::ser::to_string(&old).unwrap();
+        let start = text.find("window:").unwrap();
+        let end = text.rfind(')').unwrap();
+        text.replace_range(start..end, "");
+        let parsed: GameConfig = ron::from_str(&text).expect("old options should parse");
+        assert_eq!(parsed.audio.master, 0.42);
+        assert_eq!(parsed.window.resolution, Resolution::default());
     }
 }

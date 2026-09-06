@@ -10,11 +10,11 @@
 use avian3d::prelude::*;
 use bevy::app::AppExit;
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy::window::{CursorGrabMode, CursorOptions, MonitorSelection, PrimaryWindow, WindowMode};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use leafwing_input_manager::prelude::ActionState;
 
-use crate::core::config::GameConfig;
+use crate::core::config::{GameConfig, Resolution};
 use crate::core::schedule::GameSet;
 use crate::core::settings::{self, KeyBindings, RebindableAction};
 use crate::core::states::{AppState, InGameState};
@@ -62,6 +62,10 @@ impl Plugin for MenuPlugin {
                 (open_menu, pause_physics, free_cursor),
             )
             .add_systems(OnExit(InGameState::Paused), unpause_physics)
+            .add_systems(
+                Update,
+                apply_window_config.run_if(resource_changed::<GameConfig>),
+            )
             .add_systems(OnEnter(InGameState::Playing), grab_cursor)
             .add_systems(
                 EguiPrimaryContextPass,
@@ -81,6 +85,52 @@ fn pause_physics(mut physics_time: ResMut<Time<Physics>>) {
 
 fn unpause_physics(mut physics_time: ResMut<Time<Physics>>) {
     physics_time.unpause();
+}
+
+/// Makes the primary window the size and mode the config asks for.
+///
+/// Runs on any config change rather than only when the settings screen is
+/// open, because the first change is the interesting one: `main` opens the
+/// window before `saves/options.ron` has been read (the `WindowPlugin` is
+/// built before `SettingsPlugin` runs), so the saved resolution and
+/// fullscreen choice are applied here on the first frame. Every write is
+/// guarded by an actual difference — the dev panel touches the config every
+/// frame a slider is dragged, and an unconditional `set` would re-announce
+/// the window each time.
+///
+/// Capture mode is exempt: `core::capture` renders offscreen at its own size,
+/// and resizing an unattended window is at best noise.
+fn apply_window_config(
+    config: Res<GameConfig>,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+) {
+    if crate::core::capture::is_capture_mode() {
+        return;
+    }
+    let wanted_mode = if config.window.fullscreen {
+        WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+    } else {
+        WindowMode::Windowed
+    };
+    let (width, height) = config.window.resolution.size();
+    let wanted = Vec2::new(width as f32, height as f32);
+    for mut window in &mut windows {
+        if window.mode != wanted_mode {
+            window.mode = wanted_mode;
+        }
+        // The configured resolution only rules a windowed window: fullscreen
+        // writes the screen's own size into `resolution`, and re-setting ours
+        // over it would have winit and the config fighting frame by frame.
+        if config.window.fullscreen {
+            continue;
+        }
+        // Logical pixels on both sides. Half a pixel of slack, because the
+        // physical size is stored in whole pixels and an awkward scale factor
+        // rounds the logical size on the way back out.
+        if (window.resolution.size() - wanted).abs().max_element() > 0.5 {
+            window.resolution.set(wanted.x, wanted.y);
+        }
+    }
 }
 
 fn free_cursor(mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>) {
@@ -373,6 +423,18 @@ fn settings_screen(
     if chosen != requested {
         config.graphics = chosen.settings().downgrade(*caps);
     }
+    ui.checkbox(&mut config.window.fullscreen, "Vollbild");
+    // Greyed out rather than hidden in fullscreen: the choice is remembered
+    // and comes back into force when fullscreen is switched off again.
+    ui.add_enabled_ui(!config.window.fullscreen, |ui| {
+        egui::ComboBox::from_label("Auflösung")
+            .selected_text(config.window.resolution.label())
+            .show_ui(ui, |ui| {
+                for choice in Resolution::ALL {
+                    ui.selectable_value(&mut config.window.resolution, choice, choice.label());
+                }
+            });
+    });
 
     ui.add_space(8.0);
     ui.separator();

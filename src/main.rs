@@ -58,7 +58,10 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: GAME_TITLE.into(),
-                        resolution: (1600, 900).into(),
+                        // The options file is not loaded yet at this point;
+                        // `ui::menu::apply_window_config` resizes to the
+                        // saved choice on the first frame.
+                        resolution: crate::core::config::Resolution::default().size().into(),
                         present_mode: PresentMode::AutoVsync,
                         ..default()
                     }),
