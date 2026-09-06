@@ -479,18 +479,22 @@ pub fn rim_mesh(width: f32) -> Mesh {
 /// describes the shape of a pillar; it only says which parts of the greenhouse
 /// were never cut out of it.
 const GREENHOUSE: [Cut; 7] = [
-    // The roof, from one shoulder over to the other.
-    Cut::new((0.375, 0.625), (0.290, 0.710)),
+    // The roof, from one shoulder over to the other. Its ends are where the
+    // pillars stop, so the screen and the backlight are exactly the gaps left
+    // over: shift one number and the frame stays closed.
+    Cut::new((0.375, 0.625), (0.215, 0.785)),
     // Everything on the flanks ahead of the screen's top edge: the A-pillar,
-    // and the cowl side below it.
-    Cut::new((0.020, 0.385), (0.000, 0.330)),
-    Cut::new((0.615, 0.980), (0.000, 0.330)),
+    // and the cowl side below it. A fifth of the cabin, not a third — a
+    // third is what a coupé's short greenhouse turns into two window slots
+    // with more paint between them than glass.
+    Cut::new((0.020, 0.385), (0.000, 0.215)),
+    Cut::new((0.615, 0.980), (0.000, 0.215)),
     // The same behind the backlight: C-pillar and rear quarter.
-    Cut::new((0.020, 0.385), (0.670, 1.000)),
-    Cut::new((0.615, 0.980), (0.670, 1.000)),
+    Cut::new((0.020, 0.385), (0.785, 1.000)),
+    Cut::new((0.615, 0.980), (0.785, 1.000)),
     // The B-pillar, splitting the side glass into a front and a rear door.
-    Cut::new((0.020, 0.385), (0.484, 0.516)),
-    Cut::new((0.615, 0.980), (0.484, 0.516)),
+    Cut::new((0.020, 0.385), (0.487, 0.513)),
+    Cut::new((0.615, 0.980), (0.487, 0.513)),
 ];
 
 /// How far a pressing stands off the glass it is trimming, as a fraction of the
@@ -1275,6 +1279,31 @@ mod tests {
         for around in [0.25f32, 0.75] {
             assert!(!covered(around, 0.42), "no front door glass at {around}");
             assert!(!covered(around, 0.58), "no rear door glass at {around}");
+        }
+
+        // And how *much* of it is left over. Every point above is satisfied by
+        // pillars wide enough to leave two slots, which is exactly what the
+        // first table did: a third of the cabin to each end pillar turned a
+        // coupé's short greenhouse into more paint than glass. Half the length
+        // of a flank has to be daylight.
+        let steps = 500;
+        let daylight = (0..steps)
+            .filter(|i| !covered(0.25, (*i as f32 + 0.5) / steps as f32))
+            .count() as f32
+            / steps as f32;
+        assert!(
+            daylight > 0.5,
+            "only {:.0}% of a flank is glass; the pillars have eaten the windows",
+            daylight * 100.0
+        );
+
+        // The frame has to be closed, too: a pillar that stops short of the
+        // roof leaves a rib of glass running over the car between them.
+        for edge in [0.215f32, 0.785] {
+            assert!(
+                covered(0.25, edge - 1e-3) != covered(0.50, edge - 1e-3),
+                "the roof and the pillars disagree about where {edge} is"
+            );
         }
     }
 

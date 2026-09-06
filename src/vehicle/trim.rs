@@ -35,6 +35,12 @@ pub struct TrimKit {
     pub grille: Handle<StandardMaterial>,
     pub chrome: Handle<StandardMaterial>,
     pub mirror: Handle<StandardMaterial>,
+    /// A flat quad, for the one thing on a car that is a picture rather than a
+    /// shape.
+    pub plate: Handle<Mesh>,
+    /// One material per registration in [`super::plate::REGISTRATIONS`], shared
+    /// by every car wearing it.
+    pub plates: Vec<Handle<StandardMaterial>>,
 }
 
 /// Outer radius of the steering wheel mesh, before it is scaled to a cabin.
@@ -47,8 +53,29 @@ const WHEEL_RADIUS: f32 = 0.163;
 /// darker than any real wall.
 const CABIN_DARK: f32 = 0.030;
 
-pub fn build_kit(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> TrimKit {
+pub fn build_kit(
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+) -> TrimKit {
+    let plates = super::plate::REGISTRATIONS
+        .iter()
+        .map(|registration| {
+            let texture = images.add(super::plate::texture(registration));
+            materials.add(StandardMaterial {
+                base_color_texture: Some(texture),
+                // A plate is retroreflective, which nothing here models; what
+                // it must not be is glossy, or every one in a car park flares
+                // white at the same moment as the sun crosses them.
+                perceptual_roughness: 0.42,
+                ..default()
+            })
+        })
+        .collect();
+
     TrimKit {
+        plate: meshes.add(Rectangle::new(super::plate::SIZE.x, super::plate::SIZE.y)),
+        plates,
         block: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         wheel: meshes.add(Torus::new(WHEEL_RADIUS * 0.89, WHEEL_RADIUS)),
         pipe: meshes.add(Cylinder::new(0.5, 1.0)),
@@ -321,6 +348,7 @@ pub fn fit(
     class: VehicleClass,
     spec: &VehicleSpec,
     paint: &Handle<StandardMaterial>,
+    at: Vec3,
 ) {
     let f = Fittings::of(class, spec);
 
@@ -355,7 +383,9 @@ pub fn fit(
         let root = Vec3::new(side * f.mirror.x, f.mirror.y, f.mirror.z);
         let out = Vec3::new(side * 0.10, -0.03, 0.0);
         bolt(&kit.trim, root + out * 0.4, Vec3::new(0.09, 0.035, 0.035));
-        bolt(&kit.trim, root + out, Vec3::new(0.075, 0.085, 0.15));
+        // The shell is painted and the stalk is not, which is how every mirror
+        // built since about 1990 is finished.
+        bolt(paint, root + out, Vec3::new(0.075, 0.085, 0.15));
         bolt(
             &kit.mirror,
             root + out + Vec3::new(side * 0.038, 0.0, 0.008),
@@ -373,10 +403,20 @@ pub fn fit(
             .with_scale(Vec3::new(0.055, 0.16, 0.055)),
     ));
 
-    // Keeps the signature honest while the plate itself is still to come: the
-    // body colour is already used by the mirror shells on classes that have a
-    // painted one.
-    let _ = paint;
+    // Plates, front and rear, on the flat between the bumper and the lamps.
+    // Both face outwards: a rectangle's front is +Z, so the rear one is turned
+    // and the front one is turned the other way.
+    let registration = kit.plates[super::plate::registration_for(at)].clone();
+    for (z, yaw) in [
+        (f.nose - 0.055, std::f32::consts::PI),
+        (f.tail + 0.055, 0.0),
+    ] {
+        parent.spawn((
+            Mesh3d(kit.plate.clone()),
+            MeshMaterial3d(registration.clone()),
+            Transform::from_xyz(0.0, f.plate_y, z).with_rotation(Quat::from_rotation_y(yaw)),
+        ));
+    }
 }
 
 #[cfg(test)]

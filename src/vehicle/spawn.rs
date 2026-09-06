@@ -147,7 +147,7 @@ pub fn build_assets(
             perceptual_roughness: 0.24,
             ..glazing(1.0)
         }),
-        trim: super::trim::build_kit(meshes, materials),
+        trim: super::trim::build_kit(meshes, materials, images),
     }
 }
 
@@ -284,7 +284,14 @@ pub fn spawn_vehicle(
                 Transform::IDENTITY,
             ));
         }
-        super::trim::fit(parent, &assets.trim, class, &fitted, &paint);
+        super::trim::fit(
+            parent,
+            &assets.trim,
+            class,
+            &fitted,
+            &paint,
+            transform.translation,
+        );
 
         for (index, anchor) in anchors.iter().enumerate().take(WHEEL_COUNT) {
             // Wheels are built about the X axis at unit radius, so the whole

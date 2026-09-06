@@ -19,6 +19,15 @@ const POOL_SIZE: usize = 64;
 const LAMP_HEIGHT: f32 = 7.5;
 /// How far the lamp head reaches out over the road from its column.
 const ARM_REACH: f32 = 1.5;
+/// How far back from the kerb line the column stands, on the pavement.
+///
+/// A lamp post is street furniture, and street furniture stands on the
+/// footway: `world::props` sets its own back by 0.75 m for the same reason.
+/// This was negative — nine tenths of a metre the *other* way — which stood
+/// every column in the gutter, and the tests below never caught it because
+/// they only ever asked whether the column landed back where the post said,
+/// not whether the post was anywhere sane.
+const KERB_SET_BACK: f32 = 0.7;
 /// Distance between lamp posts along a street.
 const LAMP_SPACING: f32 = 32.0;
 /// Sodium-vapour warmth.
@@ -53,8 +62,10 @@ impl LampPosts {
             let b = graph.node(edge.b).pos;
             let Ok(dir) = Dir2::new(b - a) else { continue };
             let normal = Vec2::new(-dir.y, dir.x);
-            // Just inside the kerb line.
-            let offset = edge.width * 0.5 - 0.9;
+            // Behind the kerb line, on the footway. `edge.width` is the
+            // carriageway — `markings` paints a crossing across 92% of it —
+            // so half of it is the kerb and anything less is the road.
+            let offset = edge.width * 0.5 + KERB_SET_BACK;
 
             let count = (edge.length / LAMP_SPACING).floor() as i32;
             for i in 1..count {
@@ -198,7 +209,14 @@ fn reposition_lamps(
         // hang off it back towards the kerb. Yaw is set so the lamp's local +X
         // points that way, which is where those two children sit.
         let head = post.foot + post.inward * ARM_REACH;
-        transform.translation = Vec3::new(head.x, LAMP_HEIGHT, head.y);
+        // Standing on the footway rather than in the road, the whole lamp
+        // rises with it — otherwise the column's bottom is buried by a kerb's
+        // worth and the post looks sunk into the slabs.
+        transform.translation = Vec3::new(
+            head.x,
+            LAMP_HEIGHT + super::buildings::SIDEWALK_HEIGHT,
+            head.y,
+        );
         transform.rotation = Quat::from_rotation_y(post.inward.y.atan2(-post.inward.x));
     }
 }
@@ -252,6 +270,29 @@ mod tests {
                 "with inward {inward:?} the column landed at {:?}, not {:?}",
                 column_foot(post),
                 post.foot
+            );
+        }
+    }
+
+    #[test]
+    fn a_column_stands_on_the_footway_and_only_the_arm_is_over_the_road() {
+        // The one thing the other two tests here cannot see, because they take
+        // a post's foot as given: whether the foot is on the pavement at all.
+        // It was not — the offset was subtracted from the half-width instead of
+        // added, so every column in the city stood the best part of a metre
+        // inside the carriageway.
+        for width in [6.0f32, 9.0, 12.0, 18.0] {
+            let offset = width * 0.5 + KERB_SET_BACK;
+            assert!(
+                offset > width * 0.5,
+                "a column at {offset} m is in the road on a {width} m street"
+            );
+            // And the arm has to earn its keep: the head belongs over the
+            // carriageway, or the pool of light lands on the slabs.
+            let head = offset - ARM_REACH;
+            assert!(
+                head < width * 0.5,
+                "the head at {head} m never reaches over a {width} m street"
             );
         }
     }

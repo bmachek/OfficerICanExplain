@@ -239,8 +239,16 @@ fn switch_beams(
     >,
     mut beams: Query<&mut SpotLight, With<HeadlightBeam>>,
     existing: Query<&HeadlightBeam>,
+    config: Res<crate::core::config::GameConfig>,
 ) {
     let night = night_factor(clock.hours);
+    // A beam is born at dusk and dies at dawn, so it can never be picked up by
+    // `render::volumetrics`, which attaches its lights once and then sleeps on
+    // a change detector. The component has to go on at spawn instead — which
+    // is the better place for it anyway: the tier is read at the one moment
+    // the light exists to read it for.
+    let volumetric =
+        config.graphics.volumetrics == crate::render::quality::Volumetrics::FogAndLights;
 
     for (vehicle, spec, children) in &driven {
         let beam = children
@@ -257,25 +265,34 @@ fn switch_beams(
             }
             (true, None) => {
                 let half = spec.half_extents;
-                commands.entity(vehicle).with_child((
-                    HeadlightBeam,
-                    SpotLight {
-                        color: Color::srgb(1.0, 0.97, 0.90),
-                        intensity: BEAM_INTENSITY * night,
-                        range: BEAM_RANGE,
-                        inner_angle: 0.22,
-                        outer_angle: 0.62,
-                        // Shadowed spot lights on every car in a chase is the
-                        // one thing here that would actually cost frames.
-                        shadow_maps_enabled: false,
-                        ..default()
-                    },
-                    // Spot lights fire along -Z, which is also the car's
-                    // forward; the pitch is the dip that keeps the beam on the
-                    // road instead of in oncoming windscreens.
-                    Transform::from_xyz(0.0, half.y * 0.1, -half.z)
-                        .with_rotation(Quat::from_rotation_x(-0.16)),
-                ));
+                commands.entity(vehicle).with_children(|car| {
+                    let mut light = car.spawn((
+                        HeadlightBeam,
+                        SpotLight {
+                            color: Color::srgb(1.0, 0.97, 0.90),
+                            intensity: BEAM_INTENSITY * night,
+                            range: BEAM_RANGE,
+                            inner_angle: 0.22,
+                            outer_angle: 0.62,
+                            // Shadowed spot lights on every car in a chase is
+                            // the one thing here that would actually cost
+                            // frames.
+                            shadow_maps_enabled: false,
+                            ..default()
+                        },
+                        // Spot lights fire along -Z, which is also the car's
+                        // forward; the pitch is the dip that keeps the beam on
+                        // the road instead of in oncoming windscreens.
+                        Transform::from_xyz(0.0, half.y * 0.1, -half.z)
+                            .with_rotation(Quat::from_rotation_x(-0.16)),
+                    ));
+                    if volumetric {
+                        // What turns a lit patch of road into a pair of cones
+                        // coming at you through the drizzle. It has to go on
+                        // the spot light itself, not alongside it.
+                        light.insert(bevy::light::VolumetricLight);
+                    }
+                });
             }
             (false, Some(beam)) => commands.entity(beam).despawn(),
             (false, None) => {}
