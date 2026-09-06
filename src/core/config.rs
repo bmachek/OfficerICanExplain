@@ -103,6 +103,25 @@ pub struct MoodConfig {
     /// Mood below which a flummi counts as having gone red. What the rage-wave
     /// readout in the HUD counts crossings of.
     pub rage_line: f32,
+    /// How far a raspberry carries as an insult, in metres. Deliberately
+    /// shorter than a whistle: it should be possible to be rude to one person
+    /// without starting a riot, and to cheer up a whole street at once.
+    pub taunt_radius: f32,
+    pub cheer_radius: f32,
+    /// How much mood a taunt takes off somebody standing right next to it, at
+    /// a fuse of 1. Further away it is less; see
+    /// [`crate::mood::provoke::carry`].
+    pub taunt_bite: f32,
+    /// And how much a whistle gives back.
+    pub cheer_warmth: f32,
+    /// Seconds between one flummi's provocations. Long enough that the button
+    /// is a decision rather than a drum roll.
+    pub provoke_rest: f32,
+    /// How long somebody stays after whoever offended them, in seconds.
+    pub grudge_seconds: f32,
+    /// Ground speed of a flummi with a score to settle, in m/s. Faster than
+    /// walking and slower than sprinting: being chased has to be survivable.
+    pub grudge_speed: f32,
 }
 
 /// The mixer. Three numbers rather than one, because the background bed and
@@ -163,6 +182,13 @@ impl Default for GameConfig {
                 bop_limit: 6.5,
                 outrage_limit: 18.0,
                 rage_line: -0.5,
+                taunt_radius: 11.0,
+                cheer_radius: 15.0,
+                taunt_bite: 0.55,
+                cheer_warmth: 0.34,
+                provoke_rest: 0.8,
+                grudge_seconds: 7.0,
+                grudge_speed: 5.2,
             },
             camera: CameraConfig {
                 speed: 25.0,

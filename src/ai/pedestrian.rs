@@ -27,7 +27,8 @@ use crate::core::config::GameConfig;
 use crate::core::rng::{stream, stream_for};
 use crate::core::schedule::GameSet;
 use crate::mood::face::{FaceAssets, FaceLevel};
-use crate::mood::feeling::{Mood, MoodRng, Temperament};
+use crate::mood::feeling::{Mood, MoodRng, Tempers};
+use crate::mood::provoke::Provoker;
 use crate::mood::voice::Voicebox;
 use crate::player::on_foot::Player;
 use crate::world::City;
@@ -47,7 +48,7 @@ const HEIGHT: f32 = 1.05;
 const STAND_HEIGHT: f32 = HEIGHT * 0.5 + RADIUS;
 
 const WALK_SPEED: f32 = 1.5;
-const FLEE_SPEED: f32 = 5.4;
+pub const FLEE_SPEED: f32 = 5.4;
 /// A vehicle closer than this and moving fast enough is worth running from.
 const SCARE_RADIUS: f32 = 14.0;
 const SCARE_SPEED: f32 = 6.0;
@@ -84,6 +85,15 @@ struct PedestrianAssets {
     clothes: Vec<Handle<StandardMaterial>>,
 }
 
+/// Everything that decides where the crowd is walking.
+///
+/// Exported so that anything wanting to override a flummi's intent — somebody
+/// with a grudge, somebody too pleased with themselves to walk in a straight
+/// line — can simply run after it. Both write `Bouncer::desired`, and whichever
+/// runs last is what the body actually does.
+#[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Walking;
+
 pub struct PedestrianPlugin;
 
 impl Plugin for PedestrianPlugin {
@@ -100,6 +110,7 @@ impl Plugin for PedestrianPlugin {
                     super::figure::animate,
                 )
                     .chain()
+                    .in_set(Walking)
                     .in_set(GameSet::Ai),
             );
     }
@@ -157,6 +168,7 @@ fn maintain_population(
     faces: Res<FaceAssets>,
     mut rng: ResMut<PedestrianRng>,
     mut tempers: ResMut<MoodRng>,
+    mix: Res<Tempers>,
     players: Query<&Transform, With<Player>>,
     pedestrians: Query<(Entity, &Transform), With<Pedestrian>>,
 ) {
@@ -215,7 +227,7 @@ fn maintain_population(
         // Drawn from its own stream: a citizen's disposition must not depend on
         // how many of them have been spawned already, and retuning the mix must
         // not move anybody's route.
-        let temper = Temperament::draw(&mut tempers.0);
+        let temper = mix.draw(&mut tempers.0);
         let mood = temper.baseline;
         let worn = faces.wear(mood);
         // Their own voice, for as long as they are resident. The same stream as
@@ -245,6 +257,7 @@ fn maintain_population(
             Mood::new(mood),
             FaceLevel(worn.level),
             Voicebox::new(pitch),
+            Provoker::default(),
             Visibility::default(),
         ));
         super::figure::dress(&mut person, &figures, material, &worn, &mut rng.0);

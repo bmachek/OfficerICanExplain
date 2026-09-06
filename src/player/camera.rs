@@ -183,26 +183,21 @@ fn auto_follow(
     time: Res<Time>,
     config: Res<GameConfig>,
     motion: Res<AccumulatedMouseMotion>,
-    players: Query<
-        (
-            &LinearVelocity,
-            Option<&Driving>,
-            Option<&ActionState<Action>>,
-        ),
-        With<Player>,
-    >,
+    players: Query<(&LinearVelocity, Option<&Driving>), With<Player>>,
     vehicles: Query<(&Transform, &LinearVelocity), (With<Vehicle>, Without<Player>)>,
     mut rigs: Query<&mut CameraRig>,
 ) {
-    let Ok((velocity, driving, action_state)) = players.single() else {
+    let Ok((velocity, driving)) = players.single() else {
         return;
     };
 
-    // Aiming counts as looking: someone holding a weapon on a target is
-    // pointing the camera on purpose, and their own footwork must not drag it
-    // off the thing they are pointing it at.
-    let aiming = action_state.is_some_and(|state| state.pressed(&Action::Aim));
-    let handled = aiming || motion.delta.length() > LOOK_DEADZONE;
+    // Holding the aim button used to count as looking — somebody holding a
+    // weapon on a target is pointing the camera on purpose — and that exemption
+    // went with the weapon. Cheering does not inherit it: whistling at a
+    // stranger is no reason to stop the view following where you are going, and
+    // a camera that froze every time you were friendly would be a strange thing
+    // to live with. So the mouse is the only thing that counts as looking now.
+    let handled = motion.delta.length() > LOOK_DEADZONE;
 
     // What "behind" means. A car points where its nose points even while it is
     // reversing, so backing off a kerb does not whip the view round the boot

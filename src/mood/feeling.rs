@@ -134,33 +134,8 @@ impl Temperament {
         }
     }
 
-    /// The five, worst-tempered last, with the share of the crowd each gets.
-    ///
-    /// Weighted rather than uniform because a city of one-fifth Wutbürger is a
-    /// city where the joke never lands — the shove has to bounce off somebody
-    /// most of the time for it to be funny when it does not.
-    pub const CROWD: [(fn() -> Self, f32); 5] = [
-        (Self::serene, 0.15),
-        (Self::easygoing, 0.25),
-        (Self::ordinary, 0.30),
-        (Self::touchy, 0.20),
-        (Self::ragemonger, 0.10),
-    ];
-
-    /// Draws one from the crowd's mix.
-    pub fn draw(rng: &mut ChaCha8Rng) -> Self {
-        let total: f32 = Self::CROWD.iter().map(|(_, share)| share).sum();
-        let mut ticket = rng.random_range(0.0..total);
-        for (make, share) in Self::CROWD {
-            ticket -= share;
-            if ticket <= 0.0 {
-                return make();
-            }
-        }
-        Self::ordinary()
-    }
-
-    /// For the dev panel and for test failures worth reading.
+    /// For test failures worth reading. Reported off the fuse, because that is
+    /// the field the five differ in most and the one they are named for.
     pub fn name(&self) -> &'static str {
         match self.fuse {
             f if f < 0.30 => "serene",
@@ -169,6 +144,83 @@ impl Temperament {
             f if f < 1.15 => "touchy",
             _ => "ragemonger",
         }
+    }
+}
+
+/// One entry in the city's mix of dispositions.
+#[derive(Clone, Copy, Debug)]
+pub struct Kind {
+    pub name: &'static str,
+    pub temper: Temperament,
+    /// This kind's share of the crowd, relative to the others.
+    pub share: f32,
+}
+
+/// The five, and how much of the city each of them is.
+///
+/// A resource rather than a constant so the dev panel can push them about while
+/// the game runs, which is the only way to find out how touchy a city has to be
+/// before it is funny rather than exhausting. Newly spawned flummis draw from
+/// whatever is in here; the ones already walking about keep the disposition
+/// they were born with, and the panel's button to clear the crowd is how you
+/// see a change take hold.
+///
+/// Weighted rather than uniform because a city of one-fifth Wutbürger is a city
+/// where the joke never lands — a shove has to bounce off somebody most of the
+/// time for it to be funny when it does not.
+#[derive(Resource, Clone, Debug)]
+pub struct Tempers(pub [Kind; 5]);
+
+impl Default for Tempers {
+    fn default() -> Self {
+        Self([
+            Kind {
+                name: "serene",
+                temper: Temperament::serene(),
+                share: 0.15,
+            },
+            Kind {
+                name: "easygoing",
+                temper: Temperament::easygoing(),
+                share: 0.25,
+            },
+            Kind {
+                name: "ordinary",
+                temper: Temperament::ordinary(),
+                share: 0.30,
+            },
+            Kind {
+                name: "touchy",
+                temper: Temperament::touchy(),
+                share: 0.20,
+            },
+            Kind {
+                name: "ragemonger",
+                temper: Temperament::ragemonger(),
+                share: 0.10,
+            },
+        ])
+    }
+}
+
+impl Tempers {
+    /// Draws one citizen's disposition from the mix.
+    pub fn draw(&self, rng: &mut ChaCha8Rng) -> Temperament {
+        let total: f32 = self.0.iter().map(|kind| kind.share.max(0.0)).sum();
+        if total <= 0.0 {
+            // Every share dragged to zero in the dev panel. Somebody still has
+            // to be spawned, and an ordinary citizen is the least surprising
+            // thing to hand back.
+            return Temperament::ordinary();
+        }
+        let mut ticket = rng.random_range(0.0..total);
+        for kind in &self.0 {
+            ticket -= kind.share.max(0.0);
+            if ticket <= 0.0 {
+                return kind.temper;
+            }
+        }
+        self.0[self.0.len() - 1].temper
     }
 }
 
@@ -225,6 +277,7 @@ pub struct FeelingPlugin;
 impl Plugin for FeelingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CityMood>()
+            .init_resource::<Tempers>()
             .add_systems(Startup, seed_the_stream)
             .add_systems(
                 Update,
@@ -468,7 +521,8 @@ mod tests {
     #[test]
     fn the_crowd_is_mostly_bearable() {
         let mut rng = stream_for(0, stream::MOOD);
-        let drawn: Vec<Temperament> = (0..1000).map(|_| Temperament::draw(&mut rng)).collect();
+        let tempers = Tempers::default();
+        let drawn: Vec<Temperament> = (0..1000).map(|_| tempers.draw(&mut rng)).collect();
         let menaces = drawn.iter().filter(|t| t.fuse > 1.0).count();
         assert!(
             (50..200).contains(&menaces),
@@ -482,12 +536,30 @@ mod tests {
 
     #[test]
     fn every_temperament_answers_to_its_own_name() {
-        for (make, _) in Temperament::CROWD {
-            let temper = make();
-            assert!(!temper.name().is_empty());
+        // The dev panel labels its sliders from `Kind::name` and tests report
+        // from `Temperament::name`, which is derived. If the two ever disagree
+        // a slider is quietly editing something other than what it says.
+        for kind in Tempers::default().0 {
+            assert_eq!(
+                kind.temper.name(),
+                kind.name,
+                "the table calls it {} and the fuse says {}",
+                kind.name,
+                kind.temper.name()
+            );
         }
-        assert_eq!(Temperament::ragemonger().name(), "ragemonger");
-        assert_eq!(Temperament::serene().name(), "serene");
+    }
+
+    #[test]
+    fn a_table_with_nothing_left_in_it_still_produces_a_citizen() {
+        // Every share can be dragged to zero in the dev panel, and the crowd
+        // still has to be filled.
+        let mut empty = Tempers::default();
+        for kind in &mut empty.0 {
+            kind.share = 0.0;
+        }
+        let mut rng = stream_for(0, stream::MOOD);
+        assert_eq!(empty.draw(&mut rng).name(), "ordinary");
     }
 
     #[test]

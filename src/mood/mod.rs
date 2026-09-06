@@ -7,6 +7,8 @@
 
 pub mod face;
 pub mod feeling;
+pub mod grudge;
+pub mod provoke;
 pub mod voice;
 
 use bevy::prelude::*;
@@ -24,16 +26,20 @@ impl Plugin for MoodPlugin {
             app.add_plugins(voice::VoicePlugin);
         }
 
-        app.add_plugins(feeling::FeelingPlugin)
-            .add_systems(Startup, build_faces)
-            .add_systems(
-                Update,
-                // After the mood systems, which are also in `Ai`: the face is
-                // read from a mood that has already settled this frame.
-                face::wear_the_mood
-                    .in_set(GameSet::Ai)
-                    .after(feeling::Feeling),
-            );
+        app.add_plugins((
+            feeling::FeelingPlugin,
+            provoke::ProvokePlugin,
+            grudge::GrudgePlugin,
+        ))
+        .add_systems(Startup, build_faces)
+        .add_systems(
+            Update,
+            // After the mood systems, which are also in `Ai`: the face is
+            // read from a mood that has already settled this frame.
+            face::wear_the_mood
+                .in_set(GameSet::Ai)
+                .after(feeling::Feeling),
+        );
 
         // Baked in only when a capture asked for it, so an ordinary run never
         // pays for the query. See `core::capture`.

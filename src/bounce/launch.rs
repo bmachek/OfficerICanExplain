@@ -53,6 +53,25 @@ pub struct KnockedDown {
     pub left: f32,
 }
 
+/// Throws somebody off their feet.
+///
+/// The one way anybody in this city is ever knocked over, whether it was a car
+/// that did it or a neighbour with a score to settle. Kept in one place because
+/// the three components have to come off and go back on together: with
+/// `LockedAxes` left on, a launched flummi slides along the pavement bolt
+/// upright, and without [`KnockedDown`] nothing ever stands it back up.
+pub fn launch(commands: &mut Commands, victim: Entity, velocity: &mut LinearVelocity, throw: Vec3) {
+    velocity.0 = throw;
+    commands
+        .entity(victim)
+        .insert((KnockedDown { left: DOWN_TIME }, Launched))
+        .remove::<LockedAxes>();
+}
+
+/// Upward part of any throw, in m/s. Exposed because a ram wants the same arc
+/// a bumper gives: over the top rather than along the ground.
+pub const THROW_UP: f32 = LAUNCH_UP;
+
 /// How hard a car actually lands a blow on somebody on foot, in m/s. Both
 /// arguments are speeds along the line from the car to the victim: how fast the
 /// car is bearing down on them, and how fast they are already going the same
@@ -132,11 +151,12 @@ fn run_over_player(
         let closing = driven_at - fleeing;
 
         // Over the wing rather than under the wheels.
-        velocity.0 = *away * (closing * KNOCKBACK) + Vec3::Y * LAUNCH_UP;
-        commands
-            .entity(player)
-            .insert((KnockedDown { left: DOWN_TIME }, Launched))
-            .remove::<LockedAxes>();
+        launch(
+            &mut commands,
+            player,
+            &mut velocity,
+            *away * (closing * KNOCKBACK) + Vec3::Y * LAUNCH_UP,
+        );
 
         info!("run over at {closing:.1} m/s, launched with {wallop:.1} m/s of wallop");
         // One car per frame. Being hit by two at once is still one accident.

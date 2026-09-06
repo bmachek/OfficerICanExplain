@@ -7,6 +7,11 @@
 //! direction, in a car its Y is throttle/brake and its X is steering. Same for
 //! `Jump`/`Handbrake` sharing Space — context decides which one reads it, which
 //! is exactly how the games this borrows from behave.
+//!
+//! [`Action::Taunt`] and [`Action::Cheer`] sit on the two mouse buttons that
+//! used to fire and aim a weapon. The bindings are unchanged on purpose: the
+//! trigger finger already knows where they are, and a game about being rude to
+//! strangers wants its rudeness under the same thumb a shooter puts a gun.
 
 use bevy::prelude::*;
 use leafwing_input_manager::prelude::*;
@@ -21,8 +26,10 @@ pub enum Action {
     Sprint,
     /// Enter/exit vehicle, pick things up.
     Interact,
-    Fire,
-    Aim,
+    /// Blow a raspberry at everybody nearby.
+    Taunt,
+    /// Whistle at them instead.
+    Cheer,
     Handbrake,
     Pause,
     /// Opens the full-screen map.
@@ -43,8 +50,8 @@ impl Action {
         map.insert(Self::Jump, KeyCode::Space);
         map.insert(Self::Sprint, KeyCode::ShiftLeft);
         map.insert(Self::Interact, KeyCode::KeyF);
-        map.insert(Self::Fire, MouseButton::Left);
-        map.insert(Self::Aim, MouseButton::Right);
+        map.insert(Self::Taunt, MouseButton::Left);
+        map.insert(Self::Cheer, MouseButton::Right);
         map.insert(Self::Handbrake, KeyCode::Space);
         map.insert(Self::Pause, KeyCode::Escape);
         map.insert(Self::Map, KeyCode::KeyM);
@@ -58,8 +65,8 @@ impl Action {
         map.insert(Self::Jump, GamepadButton::South);
         map.insert(Self::Sprint, GamepadButton::LeftThumb);
         map.insert(Self::Interact, GamepadButton::North);
-        map.insert(Self::Fire, GamepadButton::RightTrigger2);
-        map.insert(Self::Aim, GamepadButton::LeftTrigger2);
+        map.insert(Self::Taunt, GamepadButton::RightTrigger2);
+        map.insert(Self::Cheer, GamepadButton::LeftTrigger2);
         map.insert(Self::Handbrake, GamepadButton::East);
         map.insert(Self::Pause, GamepadButton::Start);
         map.insert(Self::Map, GamepadButton::Select);
