@@ -192,7 +192,7 @@ pub fn spawn_vehicle(
     // Car paint is a coloured base under a clear lacquer, and modelling it that
     // way rather than as "shiny metal" is what makes the highlight sit *on* the
     // panel instead of tinting itself the colour of the car.
-    let finish = super::paint::finish(spec.body_color, spec.body_metallic, 0.0);
+    let finish = super::paint::finish(spec.body_color, spec.body_metallic);
     let paint = materials.add(StandardMaterial {
         base_color: finish.base_color,
         perceptual_roughness: finish.perceptual_roughness,
@@ -231,8 +231,8 @@ pub fn spawn_vehicle(
         CenterOfMass(spec.center_of_mass),
         VehicleInput::default(),
         VehicleState::default(),
-        super::damage::VehicleHealth::default(),
-        super::damage::PreviousVelocity::default(),
+        super::impact::PreviousVelocity::default(),
+        super::impact::Unsettled::default(),
         spec,
     ));
 
@@ -242,7 +242,6 @@ pub fn spawn_vehicle(
         // the car collides as the box it always did, and the bodywork is free
         // to be any shape inside that.
         parent.spawn((
-            super::damage::BodyPanel,
             Mesh3d(body.shell.clone()),
             MeshMaterial3d(paint.clone()),
             Transform::IDENTITY,
@@ -250,7 +249,6 @@ pub fn spawn_vehicle(
         // The sill, in the same paint. Separate only so the shell above it can
         // arch over the wheels without the body pinching in half.
         parent.spawn((
-            super::damage::BodyPanel,
             Mesh3d(body.lower.clone()),
             MeshMaterial3d(paint.clone()),
             Transform::IDENTITY,
@@ -280,7 +278,6 @@ pub fn spawn_vehicle(
         }
         if let Some(frame) = &body.frame {
             parent.spawn((
-                super::damage::BodyPanel,
                 Mesh3d(frame.clone()),
                 MeshMaterial3d(paint.clone()),
                 Transform::IDENTITY,

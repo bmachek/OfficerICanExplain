@@ -36,6 +36,11 @@ pub mod stream {
     /// stream would mean that giving somebody a shorter fuse also moves where
     /// the next pedestrian spawns and which street they walk down.
     pub const MOOD: u64 = 12;
+    /// Runtime wreckage: geyser spray and whatever chaos comes next. Not
+    /// world generation — it depends on what the player crashed into — but it
+    /// must still not draw from a generation stream, or knocking a hydrant
+    /// over would reshuffle where the props around it spawn.
+    pub const MAYHEM: u64 = 13;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

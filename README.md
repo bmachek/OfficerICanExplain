@@ -109,11 +109,11 @@ with traffic on it, weather, and a day.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, tunables, persisted settings and key bindings, deterministic RNG, screenshot tool |
-| `world` | City generator, road graph, chunk streaming, day/night, weather, lights, facade shells and level of detail, window interiors, trees, street furniture, roofs, road wear, wet roads |
+| `world` | City generator, road graph, chunk streaming, day/night, weather, lights, facade shells and level of detail, window interiors, trees, street furniture, world damage, roofs, road wear, wet roads |
 | `bounce` | The elastic simulation: the hop controller, squash and stretch, the boing, being thrown |
 | `mood` | How a flummi feels, the face it wears, what it says, and what it does about it |
 | `player` | Input mapping, the character controller, camera rig, enter/exit |
-| `vehicle` | Arcade vehicle physics, specs, bodywork, damage, parked-car spawning |
+| `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response, parked-car spawning |
 | `ai` | Traffic, pedestrians, shared steering, walk cycles, the figure itself |
 | `ui` | HUD, minimap, pause menu, dev tuning panel |
 | `save` | RON quick save / load |
@@ -184,7 +184,7 @@ needed an app. It enumerates the same two lists the bank's own tests iterate, so
 a sound that is not in one of them is neither auditable nor held to the rules.
 
 `tools/shoot.sh` renders the whole battery — aerial, street, dusk, night, rain,
-dawn, overcast, facade, park, wear, bodywork, damage, showroom, driving, map,
+dawn, overcast, facade, park, wear, bodywork, showroom, geyser, driving, map,
 the three faces and the street in both moods — so a rendering change can be
 judged against the last one rather than against a memory of it. `--all-presets` shoots every
 tier into `shots/<preset>/`, and frame times are collected at the end, because
@@ -196,8 +196,8 @@ afforded.
 | `--at x,y,z` / `--look x,y,z` | Camera pose |
 | `--at-node N` | Stand at road junction N, looking down the street |
 | `--at-car` | Frame the nearest parked car, three-quarters on |
-| `--damage F` | Beat that car up first, 0 to 1 |
 | `--showroom` | Park one of every archetype in a row and shoot it |
+| `--geyser` | Shear the nearest hydrant and frame the water (pair with `--frames`) |
 | `--wet F` | Soak the ground, 0 to 1 |
 | `--cover F` | Cloud over the city, 0 to 1; above about seven tenths it rains |
 | `--eye H` | Eye height for `--at-node` |

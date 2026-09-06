@@ -6,6 +6,7 @@ pub mod decals;
 pub mod facade;
 pub mod markings;
 pub mod material;
+pub mod mayhem;
 pub mod props;
 pub mod road;
 pub mod roadgraph;
@@ -42,6 +43,7 @@ impl Plugin for WorldPlugin {
             timeofday::TimeOfDayPlugin,
             streetlights::StreetLightPlugin,
             vegetation::VegetationPlugin,
+            mayhem::MayhemPlugin,
         ))
         // Everything in this city is made of rubber, and the solver is where
         // that is decided. `Max` rather than the default average: a rubber ball

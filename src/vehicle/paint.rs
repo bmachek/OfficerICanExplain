@@ -54,17 +54,11 @@ pub fn street_paint(rng: &mut ChaCha8Rng) -> (Color, f32) {
     (color, metallic)
 }
 
-/// What a body panel's paint is, at a given amount of damage.
+/// What a body panel's paint is.
 ///
-/// One function, called from two places that must not disagree: `spawn` sets a
-/// new car's paint from it, and `damage::scuff_paint` recomputes a hurt one's
-/// from it every time the health changes. Recomputed rather than nudged,
-/// because a material edited in place drifts and a repaired car would stay
-/// dull — and shared rather than written twice, because "repaired is exactly
-/// as good as new" is a property of the two agreeing, and two copies of a
-/// formula agree only until somebody edits one.
-///
-/// `hurt` is nought for a new car and one for a wreck.
+/// This used to take a `hurt` parameter that cooked the finish towards soot as
+/// a car's health fell. Health went with the rest of the crime game — a rubber
+/// car cannot be hurt — so the finish is now simply what the spec says it is.
 pub struct Finish {
     pub base_color: Color,
     pub metallic: f32,
@@ -72,27 +66,15 @@ pub struct Finish {
     pub clearcoat: f32,
 }
 
-pub fn finish(body_color: Color, body_metallic: f32, hurt: f32) -> Finish {
-    let clean = LinearRgba::from(body_color);
-    let soot = LinearRgba::rgb(0.035, 0.032, 0.030);
-    // Nothing sooty until the paint has actually been cooked; a scraped car is
-    // scraped, not burnt.
-    let burn = (hurt - 0.35).max(0.0) / 0.65;
-
+pub fn finish(body_color: Color, body_metallic: f32) -> Finish {
     Finish {
-        base_color: Color::LinearRgba(LinearRgba::rgb(
-            clean.red.lerp(soot.red, burn),
-            clean.green.lerp(soot.green, burn),
-            clean.blue.lerp(soot.blue, burn),
-        )),
-        // Lacquer goes first, then the flake stops reading, then the colour
-        // cooks off towards soot.
-        clearcoat: (1.0 - hurt * 1.4).clamp(0.0, 1.0),
-        metallic: body_metallic * (1.0 - hurt * 0.8).max(0.0),
+        base_color: body_color,
+        clearcoat: 1.0,
+        metallic: body_metallic,
         // Metallic paint is rougher underneath than solid paint and reads
         // duller for it, which is why the roughness moves with the flake
         // rather than staying put.
-        perceptual_roughness: (0.30 + body_metallic * 0.22 + hurt * 0.55).clamp(0.0, 1.0),
+        perceptual_roughness: (0.30 + body_metallic * 0.22).clamp(0.0, 1.0),
     }
 }
 
@@ -276,63 +258,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_repaired_car_is_exactly_as_good_as_a_new_one() {
-        // The invariant `damage::scuff_paint` exists to keep: it recomputes
-        // from the spec rather than nudging what is there, so that health going
-        // back up puts the paint back. Both it and `spawn` go through this
-        // function now, and this is the assertion that says why.
+    fn a_new_car_wears_its_own_colour_under_full_lacquer() {
         for (colour, metallic) in [
             (Color::srgb(0.72, 0.18, 0.15), 0.35),
             (Color::srgb(0.07, 0.07, 0.08), 0.30),
             (Color::srgb(0.62, 0.64, 0.67), 0.75),
         ] {
-            let new = finish(colour, metallic, 0.0);
-            let repaired = finish(colour, metallic, 0.0);
-            assert_eq!(new.base_color, repaired.base_color);
-            assert_eq!(new.metallic, repaired.metallic);
-            assert_eq!(new.clearcoat, repaired.clearcoat);
-            assert_eq!(new.perceptual_roughness, repaired.perceptual_roughness);
-            // And a new car is a *new* car: full lacquer, all its flake, and
-            // its own colour rather than a shade of it.
+            let new = finish(colour, metallic);
             assert_eq!(new.clearcoat, 1.0, "a new car is already dull");
             assert_eq!(new.metallic, metallic);
             assert_eq!(LinearRgba::from(new.base_color), LinearRgba::from(colour));
+            assert!(
+                (0.0..=1.0).contains(&new.perceptual_roughness),
+                "roughness left 0..=1"
+            );
         }
-    }
-
-    #[test]
-    fn damage_only_ever_makes_paint_worse() {
-        // Every one of these is a lerp or a clamp and any of them could be
-        // written with the sign the wrong way round, which would come out as a
-        // car that polishes itself as it is shot at.
-        let (colour, metallic) = (Color::srgb(0.24, 0.44, 0.62), 0.55);
-        let mut previous = finish(colour, metallic, 0.0);
-        for step in 1..=20 {
-            let hurt = step as f32 / 20.0;
-            let now = finish(colour, metallic, hurt);
-            assert!(
-                now.clearcoat <= previous.clearcoat,
-                "lacquer came back at {hurt}"
-            );
-            assert!(
-                now.metallic <= previous.metallic,
-                "flake came back at {hurt}"
-            );
-            assert!(
-                now.perceptual_roughness >= previous.perceptual_roughness,
-                "the panel polished itself at {hurt}"
-            );
-            assert!(
-                (0.0..=1.0).contains(&now.clearcoat)
-                    && (0.0..=1.0).contains(&now.metallic)
-                    && (0.0..=1.0).contains(&now.perceptual_roughness),
-                "a paint property left 0..=1 at {hurt}"
-            );
-            previous = now;
-        }
-        // A wreck is a wreck.
-        let wrecked = finish(colour, metallic, 1.0);
-        assert_eq!(wrecked.clearcoat, 0.0, "a burnt-out car still has lacquer");
     }
 
     #[test]

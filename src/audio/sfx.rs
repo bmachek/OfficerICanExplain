@@ -20,14 +20,17 @@ use rand::RngExt;
 
 use super::bank::SoundBank;
 use super::synth::SynthSound;
-use super::{AudioRng, BLAST_EARSHOT, close_once, effect_gain, spatial_once};
+use super::{AudioRng, close_once, effect_gain, spatial_once};
+use crate::bounce::launch::KnockedDown;
 use crate::core::config::GameConfig;
 use crate::core::schedule::GameSet;
+use crate::mood::feeling::CityMood;
 use crate::player::interact::{DrivenBy, Driving};
 use crate::player::on_foot::Player;
 use crate::vehicle::controller::{VehicleInput, VehicleState};
-use crate::vehicle::damage::{VehicleDestroyed, VehicleImpact};
+use crate::vehicle::impact::VehicleImpact;
 use crate::vehicle::spawn::{AlwaysSimulated, Vehicle};
+use crate::world::mayhem::{Geyser, PropSheared, pressure};
 
 /// Metres of pavement per footfall. Distance rather than time, so sprinting
 /// speeds up the cadence for free.
@@ -48,8 +51,11 @@ const CRASH_FULL: f32 = 16.0;
 /// Per-sound gains, so the mix is one block of numbers rather than a constant
 /// buried in each system.
 mod gain {
-    pub const EXPLOSION: f32 = 1.0;
     pub const CRASH: f32 = 0.9;
+    pub const HONK: f32 = 0.7;
+    pub const WHEEE: f32 = 0.6;
+    pub const SPROING: f32 = 0.75;
+    pub const SPRAY: f32 = 0.5;
     pub const FOOTSTEP: f32 = 0.30;
     pub const DOOR: f32 = 0.6;
     pub const ENGINE: f32 = 0.55;
@@ -69,9 +75,16 @@ enum VoiceKind {
     Screech,
 }
 
-/// The ambient bed. One entity, spawned once, never despawned.
-#[derive(Component)]
-struct Ambience;
+/// One of the three ambient beds, spawned once and never despawned. The mixer
+/// crossfades between them on the city's average mood: birds when the city is
+/// pleased with itself, distant traffic when it is nothing in particular, and
+/// a demonstration somewhere behind the buildings when it has had enough.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum Ambience {
+    Traffic,
+    Birdsong,
+    Uproar,
+}
 
 pub struct SfxPlugin;
 
@@ -83,7 +96,10 @@ impl Plugin for SfxPlugin {
                 start_ambience,
                 (
                     play_impacts,
-                    play_explosions,
+                    play_honks,
+                    play_wheees,
+                    play_sproings,
+                    voice_geysers,
                     play_doors,
                     play_footsteps,
                     manage_vehicle_voices,
@@ -138,18 +154,105 @@ fn play_impacts(
     }
 }
 
-fn play_explosions(
+/// Impact severity above which the offended car honks about it.
+const HONK_FLOOR: f32 = 3.0;
+
+/// The indignant honk after a crash.
+///
+/// Not every crash: a horn that answers every scrape is a metronome, and the
+/// joke needs room to land. The pause between the bang and the honk is baked
+/// into the sound itself — see `bank::honk`.
+fn play_honks(
     mut commands: Commands,
     config: Res<GameConfig>,
     bank: Res<SoundBank>,
-    mut destroyed: MessageReader<VehicleDestroyed>,
+    mut rng: ResMut<AudioRng>,
+    mut impacts: MessageReader<VehicleImpact>,
 ) {
-    for wreck in destroyed.read() {
+    for impact in impacts.read() {
+        if impact.severity < HONK_FLOOR || rng.random::<f32>() > 0.6 {
+            continue;
+        }
         at(
             &mut commands,
-            bank.explosion.clone(),
-            wreck.position,
-            spatial_once(effect_gain(&config, gain::EXPLOSION), BLAST_EARSHOT),
+            bank.honk.clone(),
+            impact.position,
+            spatial_once(effect_gain(&config, gain::HONK), 26.0)
+                // Every car has its own voice, near enough.
+                .with_speed(0.85 + rng.random::<f32>() * 0.35),
+        );
+    }
+}
+
+/// The twang of street furniture leaving its footing.
+fn play_sproings(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    bank: Res<SoundBank>,
+    mut rng: ResMut<AudioRng>,
+    mut sheared: MessageReader<PropSheared>,
+) {
+    for shear in sheared.read() {
+        at(
+            &mut commands,
+            bank.sproing.clone(),
+            shear.position,
+            spatial_once(effect_gain(&config, gain::SPROING), 24.0)
+                // A parking meter and a phone box do not twang at the same
+                // pitch, and the ear notices even if it cannot say why.
+                .with_speed(0.85 + rng.random::<f32>() * 0.4),
+        );
+    }
+}
+
+/// Puts the spray loop on every geyser, and lets it die with the pressure.
+///
+/// The sink rides the geyser entity itself, so the spatial mixer follows the
+/// stump and the loop stops the moment the geyser despawns — with the chunk
+/// or with its own timer, either way for free.
+fn voice_geysers(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    bank: Res<SoundBank>,
+    fresh: Query<Entity, (With<Geyser>, Without<SpatialAudioSink>)>,
+    mut running: Query<(&Geyser, &mut SpatialAudioSink)>,
+) {
+    for geyser in &fresh {
+        commands.entity(geyser).insert((
+            AudioPlayer(bank.spray.clone()),
+            // Muted for the same reason the vehicle voices start muted: the
+            // first frame must not blare before the level below has run once.
+            PlaybackSettings::LOOP.with_spatial(true).muted(),
+        ));
+    }
+    for (geyser, mut sink) in &mut running {
+        let level = effect_gain(&config, gain::SPRAY) * pressure(geyser.life.fraction());
+        sink.set_volume(Volume::Linear(level));
+        if level > 0.001 && sink.is_muted() {
+            sink.unmute();
+        }
+    }
+}
+
+/// The slide whistle for anybody who has just been put in the air.
+///
+/// `Added<KnockedDown>` rather than the launch itself, so it covers every way
+/// a body leaves the ground unwillingly — bumpers, grudges, whatever comes
+/// next — without each of them having to remember the orchestra.
+fn play_wheees(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    bank: Res<SoundBank>,
+    mut rng: ResMut<AudioRng>,
+    launched: Query<&Transform, Added<KnockedDown>>,
+) {
+    for transform in &launched {
+        at(
+            &mut commands,
+            bank.wheee.clone(),
+            transform.translation,
+            spatial_once(effect_gain(&config, gain::WHEEE), 24.0)
+                .with_speed(0.9 + rng.random::<f32>() * 0.3),
         );
     }
 }
@@ -175,8 +278,8 @@ fn play_doors(
         slam(transform.translation, &mut commands);
     }
     for vehicle in vacated.read() {
-        // A wrecked car loses its driver by being despawned. That already has
-        // an explosion; it does not also need a door.
+        // A car can lose its driver by being despawned out from under them —
+        // streaming, mostly. A despawn is not a door.
         if let Ok(transform) = transforms.get(vehicle) {
             slam(transform.translation, &mut commands);
         }
@@ -347,31 +450,68 @@ fn update_vehicle_voices(
 
 fn start_ambience(
     mut commands: Commands,
-    config: Res<GameConfig>,
     bank: Res<SoundBank>,
     existing: Query<(), With<Ambience>>,
 ) {
     if !existing.is_empty() {
         return;
     }
-    commands.spawn((
-        Name::new("City ambience"),
-        Ambience,
-        AudioPlayer(bank.ambience.clone()),
-        PlaybackSettings::LOOP
-            .with_volume(Volume::Linear(config.audio.master * config.audio.ambience)),
-    ));
+    for (name, bed, sound) in [
+        ("City ambience", Ambience::Traffic, &bank.ambience),
+        ("Birdsong", Ambience::Birdsong, &bank.birdsong),
+        ("Uproar", Ambience::Uproar, &bank.uproar),
+    ] {
+        commands.spawn((
+            Name::new(name),
+            bed,
+            AudioPlayer(sound.clone()),
+            // Muted until the first mix pass, so no bed blares at full
+            // synthesis level for a frame before the mood is read.
+            PlaybackSettings::LOOP.muted(),
+        ));
+    }
+}
+
+/// How loud each ambient bed is at a given city mood, −1 to 1: (traffic,
+/// birdsong, uproar).
+///
+/// Pure, so the crossfade can be argued about without ears. The dead band
+/// around neutral is deliberate: an ordinary day is traffic and nothing else,
+/// and the first birds arriving are *news* — they say the street has actually
+/// warmed up, not that the average twitched past zero.
+pub fn ambience_mix(mood: f32) -> (f32, f32, f32) {
+    let mood = mood.clamp(-1.0, 1.0);
+    let birds = ((mood - 0.1) / 0.7).clamp(0.0, 1.0);
+    let uproar = ((-mood - 0.1) / 0.7).clamp(0.0, 1.0);
+    // The rumble never quite leaves — the city is still a city under the
+    // birds — but it makes room for whichever pole is playing.
+    let traffic = 1.0 - 0.6 * birds.max(uproar);
+    (traffic, birds, uproar)
 }
 
 fn update_ambience(
     config: Res<GameConfig>,
-    mut ambience: Query<&mut bevy::audio::AudioSink, With<Ambience>>,
+    city: Res<CityMood>,
+    mut beds: Query<(&Ambience, &mut bevy::audio::AudioSink)>,
 ) {
-    if !config.is_changed() {
-        return;
-    }
-    for mut sink in &mut ambience {
-        sink.set_volume(Volume::Linear(config.audio.master * config.audio.ambience));
+    let (traffic, birds, uproar) = ambience_mix(city.average);
+    let base = config.audio.master * config.audio.ambience;
+    for (bed, mut sink) in &mut beds {
+        let level = match bed {
+            Ambience::Traffic => traffic,
+            Ambience::Birdsong => birds,
+            Ambience::Uproar => uproar,
+        };
+        sink.set_volume(Volume::Linear(base * level));
+        // A muted sink remembers its volume, so unmuting lands on the level
+        // just set rather than on last week's.
+        if base * level > 0.001 {
+            if sink.is_muted() {
+                sink.unmute();
+            }
+        } else if !sink.is_muted() {
+            sink.mute();
+        }
     }
 }
 
@@ -408,6 +548,32 @@ mod tests {
                     "{kph}km/h at throttle {throttle} gives {pitch}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_ambience_follows_the_city_from_birds_to_barricades() {
+        let (traffic, birds, uproar) = ambience_mix(0.0);
+        assert_eq!(
+            (birds, uproar),
+            (0.0, 0.0),
+            "an ordinary day is traffic and nothing else"
+        );
+        assert_eq!(traffic, 1.0);
+
+        let (_, birds, uproar) = ambience_mix(0.9);
+        assert!(birds > 0.9, "a delighted city should be full of birds");
+        assert_eq!(uproar, 0.0, "and demonstrating about nothing");
+
+        let (_, birds, uproar) = ambience_mix(-0.9);
+        assert!(uproar > 0.9, "a furious city should be on the barricades");
+        assert_eq!(birds, 0.0, "with every bird long gone");
+
+        for mood in [-1.0, -0.5, 0.0, 0.5, 1.0] {
+            assert!(
+                ambience_mix(mood).0 > 0.3,
+                "the city is still a city at mood {mood}"
+            );
         }
     }
 

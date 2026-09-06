@@ -69,9 +69,11 @@ pub struct CaptureRequest {
     /// the pavement a car is a silhouette, and from behind the wheels are
     /// hidden by its own bumper. Judging a body change needs this view.
     pub at_car: bool,
-    /// Beats the framed car up by this fraction before shooting it, so damage
-    /// can be judged without driving into a wall at the right angle first.
-    pub damage: f32,
+    /// Shears the nearest hydrant and frames the geyser. The only way to
+    /// shoot the water: waiting for the traffic to find a hydrant is not a
+    /// screenshot. Pair with `--frames` — the column needs a second or two
+    /// of droplets in the air before it reads as a column.
+    pub geyser: bool,
     /// Lines one of every archetype up down the street and shoots the row.
     /// The only way to compare bodywork without hunting the city for a pickup.
     pub showroom: bool,
@@ -163,9 +165,7 @@ pub fn parse_args() -> Option<CaptureRequest> {
             .unwrap_or(1.7),
         hour: value_of("--hour").and_then(|v| v.parse().ok()),
         at_car: args.iter().any(|a| a == "--at-car"),
-        damage: value_of("--damage")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0.0),
+        geyser: args.iter().any(|a| a == "--geyser"),
         showroom: args.iter().any(|a| a == "--showroom"),
         wetness: value_of("--wet")
             .and_then(|v| v.parse().ok())
@@ -209,7 +209,7 @@ impl Plugin for CapturePlugin {
             })
             .add_systems(PreStartup, apply_capture_overrides)
             .add_systems(PostStartup, retarget_camera_offscreen)
-            .add_systems(Update, (pose_at_car, line_up_showroom))
+            .add_systems(Update, (pose_at_car, stage_geyser, line_up_showroom))
             .add_systems(
                 FixedUpdate,
                 autodrive.before(crate::vehicle::controller::drive_vehicles),
@@ -454,54 +454,88 @@ fn autodrive(
 /// Deferred to `Update` rather than done with the rest of the pose because
 /// `spawn_parked_vehicles` runs in `PostStartup` alongside it, and there is no
 /// ordering between them worth asserting for a debug flag.
-fn pose_at_car(
+/// Breaks the nearest hydrant and frames the resulting geyser.
+///
+/// Deferred to `Update` for the same reason `pose_at_car` is: the props do
+/// not exist until streaming has run. The shear itself goes through the same
+/// `mayhem::shear` the traffic uses, so the shot shows the real thing.
+fn stage_geyser(
     request: Res<CaptureRequest>,
     mut done: Local<bool>,
-    mut impacts: MessageWriter<crate::vehicle::damage::VehicleImpact>,
-    mut vehicles: Query<
-        (
-            Entity,
-            &Transform,
-            &mut crate::vehicle::damage::VehicleHealth,
-        ),
-        (With<Vehicle>, Without<CameraRig>),
-    >,
-    mut cameras: Query<(&mut Transform, &mut CameraRig)>,
+    mut commands: Commands,
+    mut sheared: MessageWriter<crate::world::mayhem::PropSheared>,
+    hydrants: Query<(
+        Entity,
+        &Transform,
+        &crate::world::mayhem::Breakaway,
+        Option<&crate::world::buildings::ChunkOf>,
+    )>,
+    mut cameras: Query<(&mut Transform, &mut CameraRig), Without<crate::world::mayhem::Breakaway>>,
 ) {
-    if *done || !request.at_car {
+    if *done || !request.geyser {
         return;
     }
-    let nearest = vehicles
+    let Some((entity, stump, breakaway, chunk)) = hydrants
         .iter()
+        .filter(|(_, _, breakaway, _)| breakaway.geyser)
         .min_by(|a, b| {
             a.1.translation
                 .length_squared()
                 .total_cmp(&b.1.translation.length_squared())
         })
-        .map(|(entity, transform, _)| (entity, *transform));
-    let Some((entity, car)) = nearest else {
+        .map(|(entity, transform, breakaway, chunk)| (entity, *transform, *breakaway, chunk))
+    else {
         return;
     };
 
-    if request.damage > 0.0
-        && let Ok((_, _, mut health)) = vehicles.get_mut(entity)
-    {
-        health.current = health.max * (1.0 - request.damage).max(0.01);
-        // Three blows from three sides, so the shot shows a car that has been
-        // in a fight rather than one pressed neatly on the nose.
-        for from in [
-            Vec3::new(-0.2, 0.1, -1.0).normalize(),
-            Vec3::new(1.0, 0.15, 0.3).normalize(),
-            Vec3::new(-0.7, 0.0, 0.7).normalize(),
-        ] {
-            impacts.write(crate::vehicle::damage::VehicleImpact {
-                vehicle: entity,
-                position: car.translation,
-                from,
-                severity: 18.0 * request.damage,
-            });
-        }
+    // Hit as if by a car doing 40 km/h along the street.
+    crate::world::mayhem::shear(
+        &mut commands,
+        &mut sheared,
+        entity,
+        &stump,
+        &breakaway,
+        chunk,
+        Vec3::new(11.0, 0.0, 0.0),
+        Vec3::Z,
+    );
+
+    // Framed from across the street, high enough to see the top of the
+    // column against the facade rather than against the sky.
+    let eye = stump.translation + Vec3::new(7.5, 3.2, 6.0);
+    let target = stump.translation + Vec3::Y * 3.5;
+    for (mut transform, mut rig) in &mut cameras {
+        rig.mode = CameraMode::Free;
+        *transform = Transform::from_translation(eye).looking_at(target, Vec3::Y);
+        let (yaw, pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+        rig.yaw = yaw;
+        rig.pitch = pitch;
     }
+    *done = true;
+    info!(
+        "sheared a hydrant for the camera at {:?}",
+        stump.translation
+    );
+}
+
+fn pose_at_car(
+    request: Res<CaptureRequest>,
+    mut done: Local<bool>,
+    vehicles: Query<&Transform, (With<Vehicle>, Without<CameraRig>)>,
+    mut cameras: Query<(&mut Transform, &mut CameraRig)>,
+) {
+    if *done || !request.at_car {
+        return;
+    }
+    let nearest = vehicles.iter().min_by(|a, b| {
+        a.translation
+            .length_squared()
+            .total_cmp(&b.translation.length_squared())
+    });
+    let Some(car) = nearest else {
+        return;
+    };
+    let car = *car;
 
     // Off the front three-quarter, at about eye height for someone standing
     // beside it: the angle every car photograph is taken from, because it shows

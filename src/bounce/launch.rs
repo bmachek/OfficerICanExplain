@@ -1,4 +1,4 @@
-//! Being hit by a car, and coming off worse for it.
+//! Being hit by a car, and flying beautifully for it.
 //!
 //! A vehicle that drives into somebody on foot was once nothing but a contact
 //! for the solver to sort out, and with a ton and a half arriving at 20 m/s
@@ -12,21 +12,25 @@
 //! resolved: it throws them clear and takes the character controller off them
 //! for a moment, so the throw actually lands instead of being braked away by
 //! the walk basis in two frames. Nobody is hurt — there is no health in this
-//! city — they are simply launched, and they bounce.
+//! city — they are simply launched, and they bounce. This applies to
+//! *everyone* on foot: the player and every flummi on the pavement alike,
+//! because a crowd that scatters through the air when a car arrives is the
+//! scene the whole game is for, and for a while only the player got to fly.
 //!
 //! Behind that sits [`unwedge_from_vehicles`], which is what makes the bug
-//! impossible rather than merely unlikely. However the solver, a spawn, an
-//! explosion or a wreck contrives to put a person inside a car, they are put
-//! back beside it on the next frame.
+//! impossible rather than merely unlikely. However the solver or a spawn
+//! contrives to put a person inside a car, they are put back beside it on the
+//! next frame.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use super::controller::Launched;
+use super::controller::{Bouncer, Launched};
 use crate::core::schedule::GameSet;
 use crate::player::interact::{Driving, clear_spot};
-use crate::player::on_foot::{CAPSULE_LENGTH, CAPSULE_RADIUS, Player};
+use crate::player::on_foot::{CAPSULE_RADIUS, Player};
 use crate::vehicle::spawn::Vehicle;
+use crate::vehicle::spec::VehicleSpec;
 
 /// Closing speed below which a car is a shove rather than an accident. Walking
 /// pace: nudging someone aside in a car park must not launch them across the
@@ -95,7 +99,7 @@ impl Plugin for LaunchPlugin {
         app.add_systems(
             Update,
             (
-                run_over_player,
+                run_over_anybody,
                 recover_from_knockdown,
                 unwedge_from_vehicles,
             )
@@ -105,62 +109,93 @@ impl Plugin for LaunchPlugin {
     }
 }
 
-/// Turns a car arriving at the player into a throw.
-fn run_over_player(
+/// Whether a point in a car's own frame is close enough to its bodywork for a
+/// moving bumper to have arrived.
+///
+/// Pure box arithmetic rather than a spatial query, because it runs for every
+/// pedestrian against every moving car every frame and the answer is almost
+/// always no. The margin sits slightly proud of the bodywork, so the hit
+/// registers as the bumper arrives rather than once it is already through the
+/// ribs; the vertical reach is generous because the victim's origin is at
+/// their navel and the car's at its floorpan, and a bonnet arriving at a
+/// kneecap is still being run over.
+pub fn brushes(local: Vec3, half_extents: Vec3) -> bool {
+    let reach = CAPSULE_RADIUS + 0.12;
+    local.x.abs() < half_extents.x + reach
+        && local.z.abs() < half_extents.z + reach
+        && local.y.abs() < half_extents.y + 1.2
+}
+
+/// Turns a car arriving at anybody on foot into a throw.
+///
+/// Anybody: the same rule for the player and the crowd, in one system, so the
+/// comedy is symmetric — a taxi that scatters six flummis across a junction
+/// obeys exactly the physics that launched you yesterday.
+fn run_over_anybody(
     mut commands: Commands,
-    spatial: SpatialQuery,
-    vehicles: Query<(&Transform, &LinearVelocity), (With<Vehicle>, Without<Player>)>,
-    mut players: Query<
+    vehicles: Query<(&Transform, &LinearVelocity, &VehicleSpec), With<Vehicle>>,
+    mut victims: Query<
         (Entity, &Transform, &mut LinearVelocity),
-        (With<Player>, Without<Driving>, Without<KnockedDown>),
+        (
+            With<Bouncer>,
+            Without<Vehicle>,
+            Without<Driving>,
+            Without<KnockedDown>,
+        ),
     >,
 ) {
-    let Ok((player, transform, mut velocity)) = players.single_mut() else {
+    // Almost every car in the city is parked, and a parked car never lands a
+    // blow (see `wallop_force`), so only the handful actually moving are worth
+    // testing the crowd against.
+    let moving: Vec<_> = vehicles
+        .iter()
+        .filter(|(_, velocity, _)| velocity.length_squared() > IMPACT_SPEED * IMPACT_SPEED)
+        .collect();
+    if moving.is_empty() {
         return;
-    };
+    }
 
-    // Slightly proud of the real capsule, so the hit registers as the bumper
-    // arrives rather than once it is already through the ribs.
-    let probe = Collider::capsule(CAPSULE_RADIUS + 0.12, CAPSULE_LENGTH);
-    let filter = SpatialQueryFilter::from_excluded_entities([player]);
-    let touching =
-        spatial.shape_intersections(&probe, transform.translation, Quat::IDENTITY, &filter);
+    for (victim, transform, mut velocity) in &mut victims {
+        for (car, car_velocity, spec) in &moving {
+            let local = car.rotation.inverse() * (transform.translation - car.translation);
+            if !brushes(local, spec.half_extents) {
+                continue;
+            }
 
-    for entity in touching {
-        let Ok((car, car_velocity)) = vehicles.get(entity) else {
-            continue;
-        };
+            // Measured along the line from the car to the victim, so a car
+            // sliding past someone's shoulder is a scrape and only one driving
+            // *at* them counts. Flattened: a car coming down off a kerb is not
+            // running anybody over from above.
+            let offset = (transform.translation - car.translation).with_y(0.0);
+            // Dead centre of the car there is no such line; fall back to the
+            // way it is travelling, and if it is not travelling either then
+            // this is a wedge rather than an impact and
+            // `unwedge_from_vehicles` has the player's case.
+            let Ok(away) = Dir3::new(offset).or_else(|_| Dir3::new(car_velocity.0.with_y(0.0)))
+            else {
+                continue;
+            };
+            let driven_at = car_velocity.0.dot(*away);
+            let fleeing = velocity.0.dot(*away);
+            let wallop = wallop_force(driven_at, fleeing);
+            if wallop <= 0.0 {
+                continue;
+            }
+            let closing = driven_at - fleeing;
 
-        // Measured along the line from the car to the victim, so a car sliding
-        // past someone's shoulder is a scrape and only one driving *at* them
-        // counts. Flattened: a car coming down off a kerb is not running
-        // anybody over from above.
-        let offset = (transform.translation - car.translation).with_y(0.0);
-        // Dead centre of the car there is no such line; fall back to the way it
-        // is travelling, and if it is not travelling either then this is a
-        // wedge rather than an impact and `unwedge_from_vehicles` has it.
-        let Ok(away) = Dir3::new(offset).or_else(|_| Dir3::new(car_velocity.0.with_y(0.0))) else {
-            continue;
-        };
-        let driven_at = car_velocity.0.dot(*away);
-        let fleeing = velocity.0.dot(*away);
-        let wallop = wallop_force(driven_at, fleeing);
-        if wallop <= 0.0 {
-            continue;
+            // Over the wing rather than under the wheels.
+            launch(
+                &mut commands,
+                victim,
+                &mut velocity,
+                *away * (closing * KNOCKBACK) + Vec3::Y * LAUNCH_UP,
+            );
+
+            info!("run over at {closing:.1} m/s, launched with {wallop:.1} m/s of wallop");
+            // One car per victim. Being hit by two at once is still one
+            // accident.
+            break;
         }
-        let closing = driven_at - fleeing;
-
-        // Over the wing rather than under the wheels.
-        launch(
-            &mut commands,
-            player,
-            &mut velocity,
-            *away * (closing * KNOCKBACK) + Vec3::Y * LAUNCH_UP,
-        );
-
-        info!("run over at {closing:.1} m/s, launched with {wallop:.1} m/s of wallop");
-        // One car per frame. Being hit by two at once is still one accident.
-        return;
     }
 }
 
@@ -229,6 +264,7 @@ fn unwedge_from_vehicles(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::player::on_foot::CAPSULE_LENGTH;
     use bevy::asset::AssetPlugin;
 
     #[test]
@@ -262,6 +298,27 @@ mod tests {
             "being clipped while already moving that way should throw you less far"
         );
         assert!(running > 0.0, "but it should still throw you");
+    }
+
+    #[test]
+    fn the_bumper_reaches_just_past_the_bodywork_and_no_further() {
+        let half = Vec3::new(0.95, 0.7, 2.2);
+        assert!(
+            brushes(Vec3::new(1.0, 0.0, 0.0), half),
+            "a shoulder against the flank is a hit"
+        );
+        assert!(
+            brushes(Vec3::new(0.0, 0.9, -2.3), half),
+            "a bonnet at the kneecap is still being run over"
+        );
+        assert!(
+            !brushes(Vec3::new(2.0, 0.0, 0.0), half),
+            "a metre of daylight is not a collision"
+        );
+        assert!(
+            !brushes(Vec3::new(0.0, 3.0, 0.0), half),
+            "somebody bouncing high over the roof is not under the wheels"
+        );
     }
 
     #[test]

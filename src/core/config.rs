@@ -75,6 +75,42 @@ pub struct BounceConfig {
     /// How far a figure squashes at the bottom of a hop, as a fraction of its
     /// height. Zero is a rigid body on a pogo stick; too much is a puddle.
     pub squash: f32,
+    /// Extra speed a crashed car takes away from whatever it hit, as a
+    /// fraction of the speed it lost arriving. On top of the solver's own
+    /// restitution, because the solver's idea of elastic is physically
+    /// defensible and therefore not funny.
+    ///
+    /// The three `crash_*` dials are `#[serde(default)]` so an options file
+    /// written before they existed still parses instead of resetting
+    /// everything else in it.
+    #[serde(default = "default_crash_rebound")]
+    pub crash_rebound: f32,
+    /// Upward part of that rebound, as a fraction of the speed lost. A car
+    /// that only bounces back is a billiard ball; one that also leaves the
+    /// ground is a joke.
+    #[serde(default = "default_crash_pop")]
+    pub crash_pop: f32,
+    /// Spin handed to a crashed car, in rad/s per m/s of speed lost. Off-axis
+    /// blows pirouette; head-on ones tip.
+    #[serde(default = "default_crash_spin")]
+    pub crash_spin: f32,
+}
+
+fn default_apology_range() -> f32 {
+    GameConfig::default().mood.apology_range
+}
+fn default_apology_balm() -> f32 {
+    GameConfig::default().mood.apology_balm
+}
+
+fn default_crash_rebound() -> f32 {
+    GameConfig::default().bounce.crash_rebound
+}
+fn default_crash_pop() -> f32 {
+    GameConfig::default().bounce.crash_pop
+}
+fn default_crash_spin() -> f32 {
+    GameConfig::default().bounce.crash_spin
 }
 
 /// How the city feels, and how fast it changes its mind.
@@ -117,6 +153,19 @@ pub struct MoodConfig {
     /// Seconds between one flummi's provocations. Long enough that the button
     /// is a decision rather than a drum roll.
     pub provoke_rest: f32,
+    /// How far an apology can be thrown, in metres. Shorter than a cheer:
+    /// making peace means walking up to somebody, not shouting sorry across
+    /// a junction.
+    ///
+    /// The two `apology_*` dials are `#[serde(default)]` so an options file
+    /// written before they existed still parses.
+    #[serde(default = "default_apology_range")]
+    pub apology_range: f32,
+    /// Mood restored to whoever the flower reaches. Deliberately the biggest
+    /// single lift in the game: an apology accepted has to actually settle
+    /// the matter, or the flower is a decoration on a feud.
+    #[serde(default = "default_apology_balm")]
+    pub apology_balm: f32,
     /// How long somebody stays after whoever offended them, in seconds.
     pub grudge_seconds: f32,
     /// Ground speed of a flummi with a score to settle, in m/s. Faster than
@@ -171,14 +220,25 @@ impl Default for GameConfig {
                 start_cover: 0.18,
             },
             bounce: BounceConfig {
-                // Not 1.0. A perfectly elastic city never settles, and a
-                // pedestrian who never settles cannot walk anywhere.
-                restitution: 0.86,
+                // Not 1.0 — a perfectly elastic city never settles — and no
+                // longer 0.86 either: at that height walls and kerbs threw
+                // the player around harder than the player could steer, and
+                // a crashed car pinballed for ten seconds before it could be
+                // driven again. The comedy send-offs are applied by hand
+                // (`vehicle::impact::fling`, `world::mayhem::send_off`), so
+                // the solver's own rebound can afford to be modest.
+                restitution: 0.62,
                 threshold: 0.05,
                 hop_speed: 2.8,
                 ground_accel: 42.0,
                 air_accel: 22.0,
                 squash: 0.35,
+                // Together these mean a solid 12 m/s crash throws the car
+                // back at ~7 m/s, hops it half a metre and turns it most of
+                // the way round — enough that both parties leave the scene.
+                crash_rebound: 0.6,
+                crash_pop: 0.28,
+                crash_spin: 0.35,
             },
             mood: MoodConfig {
                 contagion_radius: 9.0,
@@ -191,6 +251,8 @@ impl Default for GameConfig {
                 taunt_bite: 0.55,
                 cheer_warmth: 0.34,
                 provoke_rest: 0.8,
+                apology_range: 13.0,
+                apology_balm: 0.55,
                 grudge_seconds: 7.0,
                 grudge_speed: 5.2,
             },

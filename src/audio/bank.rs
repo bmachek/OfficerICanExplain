@@ -17,7 +17,7 @@ use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 
 use super::synth::{
-    LowPass, Partial, Resonator, SAMPLE_RATE, SynthSound, at, fade_edges, harmonics, hit,
+    LowPass, Osc, Partial, Resonator, SAMPLE_RATE, SynthSound, at, fade_edges, harmonics, hit,
     normalize, samples, white, wrap_seam,
 };
 use super::voice::{self, Onset, Syllable};
@@ -27,13 +27,22 @@ use crate::core::rng::{stream, stream_for};
 #[derive(Resource)]
 pub struct SoundBank {
     pub boing: Handle<SynthSound>,
+    /// Nothing triggers this since vehicles stopped being wreckable; it stays
+    /// in the bank, tested and auditioned, for the planned world-damage
+    /// milestone — things in this city may yet go bang, just not people.
     pub explosion: Handle<SynthSound>,
     pub crash: Handle<SynthSound>,
+    pub honk: Handle<SynthSound>,
+    pub wheee: Handle<SynthSound>,
+    pub sproing: Handle<SynthSound>,
+    pub spray: Handle<SynthSound>,
     pub footstep: Handle<SynthSound>,
     pub car_door: Handle<SynthSound>,
     pub engine: Handle<SynthSound>,
     pub screech: Handle<SynthSound>,
     pub ambience: Handle<SynthSound>,
+    pub birdsong: Handle<SynthSound>,
+    pub uproar: Handle<SynthSound>,
 
     // --- voices ---
     //
@@ -46,7 +55,14 @@ pub struct SoundBank {
     pub giggle: Handle<SynthSound>,
     pub grumble: [Handle<SynthSound>; VARIANTS],
     pub curse: [Handle<SynthSound>; VARIANTS],
+    /// The taunt rotation: raspberry, fart, cough, spit. One would wear out
+    /// inside a minute; the game's whole verb deserves a repertoire.
     pub raspberry: Handle<SynthSound>,
+    pub fart: Handle<SynthSound>,
+    pub cough: Handle<SynthSound>,
+    pub spit: Handle<SynthSound>,
+    /// Making up: two contrite syllables, thrown with a flower.
+    pub sorry: Handle<SynthSound>,
     pub gasp: Handle<SynthSound>,
 }
 
@@ -58,21 +74,47 @@ pub const VARIANTS: usize = 3;
 pub const ENGINE_REFERENCE_HZ: f32 = 40.0;
 
 pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
-    SoundBank {
-        boing: sounds.add(boing()),
-        explosion: sounds.add(explosion()),
-        crash: sounds.add(crash()),
-        footstep: sounds.add(footstep()),
-        car_door: sounds.add(car_door()),
-        engine: sounds.add(engine_loop()),
-        screech: sounds.add(screech_loop()),
-        ambience: sounds.add(ambience_loop()),
+    // Recordings first, synthesis as the fallback, decided per sound — see
+    // `super::files`. The peaks handed to the file loader are the same ones
+    // the synthesised versions normalise to, so swapping a recording in
+    // never moves that sound's place in the mix.
+    let dir = super::files::dir();
+    let shot = |name: &str, peak: f32, synth: fn() -> SynthSound| {
+        super::files::one_shot(&dir, name, peak).unwrap_or_else(synth)
+    };
+    let looped = |name: &str, peak: f32, synth: fn() -> SynthSound| {
+        super::files::looping(&dir, name, peak).unwrap_or_else(synth)
+    };
 
+    SoundBank {
+        boing: sounds.add(shot("boing", 0.85, boing)),
+        explosion: sounds.add(shot("explosion", 1.0, explosion)),
+        crash: sounds.add(shot("crash", 0.9, crash)),
+        honk: sounds.add(shot("honk", 0.8, honk)),
+        wheee: sounds.add(shot("wheee", 0.7, wheee)),
+        sproing: sounds.add(shot("sproing", 0.8, sproing)),
+        spray: sounds.add(looped("spray", 0.6, spray_loop)),
+        footstep: sounds.add(shot("footstep", 0.55, footstep)),
+        car_door: sounds.add(shot("car-door", 0.75, car_door)),
+        engine: sounds.add(looped("engine", 0.85, engine_loop)),
+        screech: sounds.add(looped("screech", 0.75, screech_loop)),
+        ambience: sounds.add(looped("ambience", 0.55, ambience_loop)),
+        birdsong: sounds.add(looped("birdsong", 0.5, birdsong_loop)),
+        uproar: sounds.add(looped("uproar", 0.6, uproar_loop)),
+
+        // The voices are deliberately not replaceable by files: a flummi's
+        // voice is a source-filter instrument pitched per speaker at
+        // playback, and a recording of a human would put an actual human in
+        // a city that must not contain one.
         whistle: std::array::from_fn(|take| sounds.add(whistle(take))),
         giggle: sounds.add(giggle()),
         grumble: std::array::from_fn(|take| sounds.add(grumble(take))),
         curse: std::array::from_fn(|take| sounds.add(curse(take))),
         raspberry: sounds.add(raspberry()),
+        fart: sounds.add(fart()),
+        cough: sounds.add(cough()),
+        spit: sounds.add(spit()),
+        sorry: sounds.add(sorry()),
         gasp: sounds.add(gasp()),
     }
 }
@@ -92,10 +134,17 @@ pub fn every_one_shot() -> Vec<(String, SynthSound)> {
         ("boing".to_string(), boing()),
         ("explosion".to_string(), explosion()),
         ("crash".to_string(), crash()),
+        ("honk".to_string(), honk()),
+        ("wheee".to_string(), wheee()),
+        ("sproing".to_string(), sproing()),
         ("footstep".to_string(), footstep()),
         ("car-door".to_string(), car_door()),
         ("giggle".to_string(), giggle()),
         ("raspberry".to_string(), raspberry()),
+        ("fart".to_string(), fart()),
+        ("cough".to_string(), cough()),
+        ("spit".to_string(), spit()),
+        ("sorry".to_string(), sorry()),
         ("gasp".to_string(), gasp()),
     ];
     for take in 0..VARIANTS {
@@ -112,6 +161,9 @@ pub fn every_loop() -> Vec<(String, SynthSound)> {
         ("engine".to_string(), engine_loop()),
         ("screech".to_string(), screech_loop()),
         ("ambience".to_string(), ambience_loop()),
+        ("birdsong".to_string(), birdsong_loop()),
+        ("uproar".to_string(), uproar_loop()),
+        ("spray".to_string(), spray_loop()),
     ]
 }
 
@@ -151,10 +203,14 @@ fn explosion() -> SynthSound {
     SynthSound::new(out)
 }
 
-/// Sheet metal hitting something.
+/// A car hitting something, in a city where the car is made of rubber.
 ///
-/// Four resonators at frequencies chosen *not* to be harmonically related.
-/// Harmonic partials read as a musical note; inharmonic ones read as a panel.
+/// This used to be four inharmonic resonators and nothing else — sheet metal,
+/// correct and grim. Rubber cars want a slapstick crash: there is still a
+/// clatter at the front so the ear knows something arrived hard, but most of
+/// the sound is now what happens *after* — a fat elastic sweep down and a
+/// wobble that rings on like a saw blade twanged over a knee, which is the
+/// sound of a bumper deciding to be a spring after all.
 fn crash() -> SynthSound {
     let mut rng = audio_stream(4);
     let mut panels = [
@@ -164,9 +220,11 @@ fn crash() -> SynthSound {
         (Resonator::new(1_877.0, 110.0), 0.28),
     ];
     let mut body = LowPass::new(170.0);
+    let mut sproing = Osc::new();
+    let mut wobble = Osc::new();
 
-    let mut out = Vec::with_capacity(samples(0.75));
-    for index in 0..samples(0.75) {
+    let mut out = Vec::with_capacity(samples(0.9));
+    for index in 0..samples(0.9) {
         let t = at(index);
         let noise = white(&mut rng);
         let strike = noise * hit(t, 0.0006, 0.010);
@@ -177,11 +235,116 @@ fn crash() -> SynthSound {
         }
         let low = body.process(noise) * hit(t, 0.003, 0.085) * 1.8;
 
-        out.push(metal * hit(t, 0.0, 0.24) + low + strike * 0.6);
+        // The rubber taking over: a boing-style sweep, an octave below the
+        // signature boing because a car is a much bigger ball.
+        let sweep_hz = 62.0 + 260.0 * (-t * 9.0).exp();
+        let elastic = sproing.sine(sweep_hz) * hit(t - 0.015, 0.008, 0.16) * 1.4;
+
+        // The twang: a low tone whose pitch itself shudders, the shudder dying
+        // out as the bumper settles. Pitch wobble rather than amplitude wobble
+        // — tremolo reads as a siren, vibrato as something physically flapping.
+        let flap = 1.0 + 0.22 * (TAU * 11.0 * t).sin() * (-t * 3.5).exp();
+        let twang = wobble.sine(96.0 * flap) * hit(t - 0.05, 0.02, 0.30) * 1.1;
+
+        out.push(metal * hit(t, 0.0, 0.16) * 0.7 + low + strike * 0.5 + elastic + twang);
     }
 
     fade_edges(&mut out, 0.003);
     normalize(&mut out, 0.9);
+    SynthSound::new(out)
+}
+
+/// The honk of a car with feelings about what just happened to it.
+///
+/// Two reedy notes a rude interval apart, pressed twice — the double press is
+/// what turns "horn" into "indignation". The half-second of silence at the
+/// front is deliberate and load-bearing: the honk is spawned by the crash, and
+/// the pause between the crash and the honk is the joke, the beat in which the
+/// car collects itself before complaining.
+fn honk() -> SynthSound {
+    /// The two reeds. A tritone-adjacent pair: consonant enough to be a chord,
+    /// sour enough to be a complaint.
+    const REEDS: [f32; 2] = [365.0, 462.0];
+    /// When each press starts and how long it is held. The second is held
+    /// longer, the way the second press of a real honk always is.
+    const PRESSES: [(f32, f32); 2] = [(0.42, 0.18), (0.68, 0.42)];
+
+    let mut oscs = [Osc::new(), Osc::new()];
+    let length = samples(1.25);
+    let mut out = Vec::with_capacity(length);
+
+    for index in 0..length {
+        let t = at(index);
+
+        let mut pressed = 0.0f32;
+        for (start, held) in PRESSES {
+            let into = t - start;
+            if into <= 0.0 {
+                continue;
+            }
+            // Fast attack, held flat, quick release: an electric horn has no
+            // dynamics, which is exactly what makes it rude.
+            let press =
+                (into / 0.012).clamp(0.0, 1.0) * (1.0 - (into - held) / 0.05).clamp(0.0, 1.0);
+            pressed = pressed.max(press);
+        }
+
+        let mut voice = 0.0;
+        for (osc, reed_hz) in oscs.iter_mut().zip(REEDS) {
+            // The diaphragm starts a shade flat and rises as it gets going.
+            let hz = reed_hz * (0.965 + 0.035 * (pressed * 3.0).min(1.0));
+            let phase = osc.advance(hz);
+            // A soft square — a reed is closer to that than to a sine, and the
+            // odd harmonics are what make it a horn rather than an organ.
+            let reed = (TAU * phase).sin()
+                + (TAU * phase * 3.0).sin() / 3.0
+                + (TAU * phase * 5.0).sin() / 5.0;
+            voice += reed;
+        }
+
+        out.push(voice * pressed);
+    }
+
+    fade_edges(&mut out, 0.004);
+    normalize(&mut out, 0.8);
+    SynthSound::new(out)
+}
+
+/// Somebody sailing through the air, scored by a slide whistle.
+///
+/// The oldest gag in the cartoon songbook: a rising glissando with a vibrato
+/// that gets more excited the higher it goes. Played wherever a body has just
+/// been launched, which in this city is often.
+fn wheee() -> SynthSound {
+    let mut rng = audio_stream(27);
+    let mut pipe = Osc::new();
+    let mut breath = LowPass::new(2_600.0);
+
+    let length = samples(0.85);
+    let mut out = Vec::with_capacity(length);
+    for index in 0..length {
+        let t = at(index);
+        let through = (t / 0.75).min(1.0);
+
+        // A little over an octave and a half, swept as a power so the climb
+        // accelerates — a linear sweep sounds like a test instrument.
+        let glide = 440.0 * 3.1f32.powf(through.powf(1.35));
+        // The vibrato deepens and quickens on the way up: the whistler is
+        // enjoying this.
+        let excitement = 1.0 + (0.01 + 0.045 * through) * (TAU * (5.5 + 4.0 * through) * t).sin();
+        let hz = glide * excitement;
+
+        let tone = pipe.sine(hz);
+        // The chiff of air over the fipple, or nobody believes the pipe.
+        let air = breath.process(white(&mut rng)) * 0.18;
+
+        // Swells in and rides out: the flight is loudest mid-arc.
+        let envelope = (t / 0.05).clamp(0.0, 1.0) * (1.0 - (t - 0.70) / 0.15).clamp(0.0, 1.0);
+        out.push((tone + air) * envelope);
+    }
+
+    fade_edges(&mut out, 0.006);
+    normalize(&mut out, 0.7);
     SynthSound::new(out)
 }
 
@@ -219,6 +382,40 @@ fn boing() -> SynthSound {
 
     fade_edges(&mut out, 0.004);
     normalize(&mut out, 0.85);
+    SynthSound::new(out)
+}
+
+/// A steel post leaving its footing: a snap, then the freed pole ringing and
+/// wobbling as it flies.
+///
+/// The wobble is the crash's twang trick at a higher pitch and a faster
+/// flutter — a parking meter is a tuning fork next to a bumper. The snap in
+/// front is a single broadband tick: bolts do not creak on the way out, they
+/// let go all at once, and the suddenness is what sells the shear.
+fn sproing() -> SynthSound {
+    let mut rng = audio_stream(30);
+    let mut stub = Resonator::new(1_450.0, 90.0);
+    let mut pole = Osc::new();
+
+    let length = samples(0.55);
+    let mut out = Vec::with_capacity(length);
+    for index in 0..length {
+        let t = at(index);
+        let noise = white(&mut rng);
+
+        let snap = noise * hit(t, 0.0004, 0.006);
+        let ring = stub.process(snap) * hit(t, 0.0, 0.12) * 0.8;
+
+        // The freed pole: pitch shudders hard at first and settles as the
+        // tumble takes over.
+        let flutter = 1.0 + 0.30 * (TAU * 19.0 * t).sin() * (-t * 5.0).exp();
+        let boing = pole.sine(210.0 * flutter) * hit(t - 0.01, 0.006, 0.20) * 1.3;
+
+        out.push(snap * 0.7 + ring + boing);
+    }
+
+    fade_edges(&mut out, 0.004);
+    normalize(&mut out, 0.8);
     SynthSound::new(out)
 }
 
@@ -378,6 +575,89 @@ fn raspberry() -> SynthSound {
     SynthSound::new(out)
 }
 
+/// The other rude noise. A raspberry is lips; this is lower, flabbier, and
+/// filtered as though through a coat — [`voice::raspberry`] at a fraction of
+/// the buzz, which is all the difference there ever was.
+fn fart() -> SynthSound {
+    let mut rng = audio_stream(32);
+    let mut out = voice::raspberry(&mut rng, 0.62, 17.0);
+    let mut coat = LowPass::new(700.0);
+    for sample in &mut out {
+        *sample = coat.process(*sample);
+    }
+    fade_edges(&mut out, 0.010);
+    normalize(&mut out, 0.85);
+    SynthSound::new(out)
+}
+
+/// Two deliberate coughs, aimed. What makes it an insult rather than a cold
+/// is that it is *performed*: two even, unhurried bursts, each an AH shaped
+/// by a real throat, with none of the raggedness of somebody actually ill.
+fn cough() -> SynthSound {
+    let mut rng = audio_stream(33);
+    let syllables = [
+        Syllable::new(voice::AH, SPEAKING_HZ * 0.72, 0.12)
+            .onset(Onset::Plosive)
+            .bend(0.70),
+        Syllable::new(voice::AH, SPEAKING_HZ * 0.68, 0.14)
+            .onset(Onset::Plosive)
+            .bend(0.62)
+            .gain(0.9),
+    ];
+    let mut out = voice::utter(&mut rng, &syllables);
+    // Coughs are mostly breath: mix the voiced part with a burst of raw noise
+    // riding the same envelope, or it reads as somebody saying "uh uh".
+    let mut breath = LowPass::new(1_900.0);
+    for (index, sample) in out.iter_mut().enumerate() {
+        let t = at(index);
+        let burst = hit(t, 0.004, 0.05) + hit(t - 0.16, 0.004, 0.055);
+        *sample = *sample * 0.6 + breath.process(white(&mut rng)) * burst * 0.9;
+    }
+    fade_edges(&mut out, 0.005);
+    normalize(&mut out, 0.8);
+    SynthSound::new(out)
+}
+
+/// A spit: the lips letting go, a short hiss, and — the half the joke lives
+/// in — a tiny wet *plip* a beat later, which is the payload landing.
+fn spit() -> SynthSound {
+    let mut rng = audio_stream(34);
+    let mut hiss = Resonator::new(3_000.0, 1_900.0);
+    let mut plip = Resonator::new(1_200.0, 250.0);
+
+    let length = samples(0.5);
+    let mut out = Vec::with_capacity(length);
+    for index in 0..length {
+        let t = at(index);
+        let noise = white(&mut rng);
+        let ptt = hiss.process(noise) * (hit(t, 0.001, 0.008) + hit(t - 0.012, 0.002, 0.030) * 0.6);
+        // 0.35s of flight before it lands somewhere off to the side.
+        let land = plip.process(noise * hit(t - 0.35, 0.0008, 0.004)) * 0.8;
+        out.push(ptt + land);
+    }
+    fade_edges(&mut out, 0.004);
+    normalize(&mut out, 0.7);
+    SynthSound::new(out)
+}
+
+/// Making up: "so-rry", or near enough. Two soft syllables, the first
+/// falling, the second bending back *up* — the rising tail is what makes it
+/// contrite rather than dismissive; the same two syllables falling are
+/// "whatever".
+fn sorry() -> SynthSound {
+    let mut rng = audio_stream(35);
+    let syllables = [
+        Syllable::new(voice::OO, SPEAKING_HZ * 0.95, 0.16).bend(0.86),
+        Syllable::new(voice::EH, SPEAKING_HZ * 0.80, 0.20)
+            .bend(1.22)
+            .gain(0.8),
+    ];
+    let mut out = voice::utter(&mut rng, &syllables);
+    fade_edges(&mut out, 0.008);
+    normalize(&mut out, 0.6);
+    SynthSound::new(out)
+}
+
 /// Somebody seeing it coming.
 fn gasp() -> SynthSound {
     let mut rng = audio_stream(26);
@@ -470,6 +750,9 @@ fn screech_loop() -> SynthSound {
 }
 
 /// The city itself: distant traffic, felt more than heard.
+///
+/// One of three beds the mixer crossfades on the city's mood — this is the
+/// neutral one, and [`birdsong_loop`] and [`uproar_loop`] are the two poles.
 fn ambience_loop() -> SynthSound {
     let mut rng = audio_stream(10);
     let length = samples(4.0);
@@ -486,6 +769,124 @@ fn ambience_loop() -> SynthSound {
 
     let mut buffer = wrap_seam(raw, fade);
     normalize(&mut buffer, 0.55);
+    SynthSound::new(buffer)
+}
+
+/// A street the city is pleased with: birds in it.
+///
+/// A handful of chirps scattered over a long loop, each one a short trilled
+/// sweep — a bird call is a whistle whose pitch shakes faster than a hand
+/// could shake it, and the trill is all that separates "bird" from "referee".
+/// The loop is long and the chirps are sparse so the repeat is not read as a
+/// rhythm; nobody counts eight seconds between phrases.
+fn birdsong_loop() -> SynthSound {
+    let mut rng = audio_stream(28);
+    let length = samples(8.0);
+    let fade = samples(0.5);
+    let mut raw = vec![0.0f32; length + fade];
+
+    // A dozen phrases, each two to four syllables from one bird.
+    for _ in 0..12 {
+        let start = rng.random_range(0..length);
+        let base = rng.random_range(2_100.0..3_900.0f32);
+        let trill = rng.random_range(22.0..38.0f32);
+        let syllables = rng.random_range(2..5u32);
+        let mut osc = Osc::new();
+
+        for syllable in 0..syllables {
+            let onset = start + samples(0.11) * syllable as usize;
+            let voiced = samples(0.07);
+            for index in 0..voiced {
+                let slot = onset + index;
+                if slot >= raw.len() {
+                    break;
+                }
+                let t = at(index);
+                // Each syllable dips as it ends, the shape of a chirp
+                // everywhere on Earth.
+                let hz = base * (1.0 + 0.10 * (TAU * trill * t).sin()) * (1.0 - 0.25 * t / 0.07);
+                raw[slot] += osc.sine(hz) * hit(t, 0.004, 0.035) * 0.8;
+            }
+        }
+    }
+
+    // Not silence between the phrases: the faintest hiss of leaves, so the
+    // bed does not switch off entirely between birds.
+    let mut leaves = LowPass::new(1_900.0);
+    for sample in raw.iter_mut() {
+        *sample += leaves.process(white(&mut rng)) * 0.05;
+    }
+
+    let mut buffer = wrap_seam(raw, fade);
+    normalize(&mut buffer, 0.5);
+    SynthSound::new(buffer)
+}
+
+/// A street the city is furious with: a demonstration somewhere behind the
+/// buildings.
+///
+/// A crowd's roar is vowel-coloured noise that will not sit still — two
+/// formant bands with unrelated slow swells, so the level prowls up and down
+/// the way a chant crossing a square does, over a rhythmic push about twice a
+/// second that the ear reads as fists going up.
+fn uproar_loop() -> SynthSound {
+    let mut rng = audio_stream(29);
+    let length = samples(6.0);
+    let fade = samples(0.8);
+
+    let mut throats = Resonator::new(480.0, 260.0);
+    let mut mouths = Resonator::new(950.0, 420.0);
+    let mut mass = LowPass::new(240.0);
+
+    let raw: Vec<f32> = (0..length + fade)
+        .map(|index| {
+            let t = at(index);
+            let noise = white(&mut rng);
+            // Two swells at rates chosen not to divide each other, so their
+            // sum never quite repeats inside the loop.
+            let prowl = 0.7 + 0.2 * (TAU * 0.23 * t).sin() + 0.1 * (TAU * 0.57 * t + 1.7).sin();
+            // The chant: a soft-edged pulse rather than a gate, or it reads as
+            // a helicopter.
+            let chant = 0.75 + 0.25 * (TAU * 2.1 * t).sin().max(0.0);
+            (throats.process(noise) * 1.0 + mouths.process(noise) * 0.6 + mass.process(noise) * 0.8)
+                * prowl
+                * chant
+        })
+        .collect();
+
+    let mut buffer = wrap_seam(raw, fade);
+    normalize(&mut buffer, 0.6);
+    SynthSound::new(buffer)
+}
+
+/// A broken water main throwing its column into the air.
+///
+/// Spray is noise twice over: the hiss of the fine mist and a fatter, slower
+/// chugging underneath where the column itself pulses out of the stump. The
+/// pulse rides at a few hertz — fast enough to read as turbulence, slow
+/// enough not to read as a helicopter — and its rate is picked against the
+/// swell the way the uproar's are: unrelated, so the pair never audibly
+/// repeats inside the loop.
+fn spray_loop() -> SynthSound {
+    let mut rng = audio_stream(31);
+    let length = samples(2.0);
+    let fade = samples(0.25);
+
+    let mut mist = Resonator::new(4_200.0, 2_600.0);
+    let mut column = LowPass::new(420.0);
+
+    let raw: Vec<f32> = (0..length + fade)
+        .map(|index| {
+            let t = at(index);
+            let noise = white(&mut rng);
+            let chug = 0.75 + 0.25 * (TAU * 6.3 * t).sin();
+            let swell = 0.85 + 0.15 * (TAU * 0.9 * t + 2.1).sin();
+            (mist.process(noise) * 0.7 + column.process(noise) * chug * 1.6) * swell
+        })
+        .collect();
+
+    let mut buffer = wrap_seam(raw, fade);
+    normalize(&mut buffer, 0.6);
     SynthSound::new(buffer)
 }
 

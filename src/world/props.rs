@@ -17,7 +17,10 @@
 //! off. It is split in two by whether the real thing is bolted down — a bollard
 //! is a post set in concrete and a bin is a bin — so a car mounting the kerb
 //! scatters the bins and stops dead at the bollard, which is the right joke
-//! both times.
+//! both times. Since the world-damage milestone the bolted half is graded
+//! rather than absolute: everything bolted except the bollard shears off its
+//! footing above some speed (`world::mayhem`), and the bollard alone is
+//! genuinely forever.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -25,6 +28,7 @@ use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 
 use super::buildings::{ChunkOf, SIDEWALK_HEIGHT};
+use super::mayhem::Breakaway;
 use super::roadgraph::RoadEdge;
 
 /// Metres between chances to place something on a kerb.
@@ -78,11 +82,36 @@ impl Prop {
     /// concrete and a bin is a bin; in a city where everything else bounces,
     /// which of the two a car sends cartwheeling down the pavement is the whole
     /// joke, and it has to be the right one or the street stops making sense.
+    ///
+    /// Bolted is no longer forever, though: everything bolted except the
+    /// bollard carries a [`Breakaway`], so a car arriving fast enough shears
+    /// it off its footing and it flies after all — see `world::mayhem`. The
+    /// bollard alone has no shear speed, because its entire comedic function
+    /// is being the one thing on the street that always wins.
     fn footing(self) -> Footing {
         match self {
-            Prop::Bollard | Prop::Sign | Prop::Meter | Prop::Hydrant | Prop::PhoneBox => {
-                Footing::Bolted
-            }
+            Prop::Bollard => Footing::Bolted(None),
+            Prop::Sign => Footing::Bolted(Some(Breakaway {
+                at: 3.5,
+                mass: 26.0,
+                geyser: false,
+            })),
+            Prop::Meter => Footing::Bolted(Some(Breakaway {
+                at: 3.5,
+                mass: 30.0,
+                geyser: false,
+            })),
+            // The hydrant is the whole reason shearing exists.
+            Prop::Hydrant => Footing::Bolted(Some(Breakaway {
+                at: 5.5,
+                mass: 55.0,
+                geyser: true,
+            })),
+            Prop::PhoneBox => Footing::Bolted(Some(Breakaway {
+                at: 7.5,
+                mass: 320.0,
+                geyser: false,
+            })),
             // Heavy enough that a person bouncing off one loses the argument,
             // light enough that a car does not.
             Prop::PostBox => Footing::Loose(120.0),
@@ -131,8 +160,10 @@ impl Prop {
 /// How firmly a prop is attached to the pavement.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Footing {
-    /// Set in concrete. Things bounce off it; it does not bounce off them.
-    Bolted,
+    /// Set in concrete. Things bounce off it; it does not bounce off them —
+    /// unless it carries a [`Breakaway`], in which case a fast enough car
+    /// takes it off its footing after all.
+    Bolted(Option<Breakaway>),
     /// Free to be sent down the street, at this mass in kilograms.
     Loose(f32),
 }
@@ -350,9 +381,18 @@ pub fn spawn_junction(
         let (head, casing, head_height) = &assets.signal_head;
         commands.spawn((
             ChunkOf(chunk),
-            // A signal is a mast in the pavement. Nothing about this city is
-            // funny enough to be worth a set of lights bouncing down a street.
+            // A signal is a mast in the pavement. It used to be immovable on
+            // the grounds that nothing here was funny enough to be worth a
+            // set of lights bouncing down a street — and then the game became
+            // a comedy, and a set of lights bouncing down a street is now
+            // precisely the register it plays in. Heavy and firmly footed all
+            // the same: shearing one takes real speed.
             RigidBody::Static,
+            Breakaway {
+                at: 6.5,
+                mass: 90.0,
+                geyser: false,
+            },
             Collider::cylinder(0.075, SIGNAL_HEIGHT),
             Mesh3d(post.clone()),
             MeshMaterial3d(steel.clone()),
@@ -426,8 +466,11 @@ pub fn spawn_edge(
                 prop.collider(),
             ));
             match prop.footing() {
-                Footing::Bolted => {
+                Footing::Bolted(breakaway) => {
                     entity.insert(RigidBody::Static);
+                    if let Some(breakaway) = breakaway {
+                        entity.insert(breakaway);
+                    }
                 }
                 Footing::Loose(mass) => {
                     entity.insert((RigidBody::Dynamic, Mass(mass)));
@@ -577,18 +620,56 @@ mod tests {
     #[test]
     fn the_things_that_should_not_move_do_not() {
         // A bollard that a car can knock over is not a bollard, and a street
-        // whose signs all end up in a heap at the first junction stops reading
-        // as a street within about a minute of play.
-        assert_eq!(Prop::Bollard.footing(), Footing::Bolted);
-        assert_eq!(Prop::Sign.footing(), Footing::Bolted);
+        // whose signs walk about on their own stops reading as a street. But
+        // bolted is no longer forever: everything bolted except the bollard
+        // shears at some speed, because a comedy city where nothing ever gives
+        // way is only half a comedy city.
+        assert_eq!(Prop::Bollard.footing(), Footing::Bolted(None));
+        for prop in [Prop::Sign, Prop::Meter, Prop::Hydrant, Prop::PhoneBox] {
+            assert!(
+                matches!(prop.footing(), Footing::Bolted(Some(_))),
+                "{prop:?} should be bolted but shearable"
+            );
+        }
         assert!(matches!(Prop::Bin.footing(), Footing::Loose(_)));
+    }
+
+    #[test]
+    fn only_the_hydrant_makes_water() {
+        for (prop, _) in Prop::TABLE {
+            let Footing::Bolted(Some(breakaway)) = prop.footing() else {
+                continue;
+            };
+            assert_eq!(
+                breakaway.geyser,
+                prop == Prop::Hydrant,
+                "{prop:?} has the wrong idea about plumbing"
+            );
+        }
+    }
+
+    #[test]
+    fn shearing_the_street_takes_more_speed_the_sturdier_the_fixture() {
+        // A sign goes before a hydrant, a hydrant before a phone box. If this
+        // ladder flattens, either everything shears at a touch — the street
+        // dissolves at parking speed — or nothing does and the milestone is
+        // quietly dead.
+        let at = |prop: Prop| match prop.footing() {
+            Footing::Bolted(Some(breakaway)) => breakaway.at,
+            _ => panic!("{prop:?} is not shearable"),
+        };
+        assert!(at(Prop::Sign) < at(Prop::Hydrant));
+        assert!(at(Prop::Hydrant) < at(Prop::PhoneBox));
+        // And nothing shears at walking-into-it speed: shearing is a crash,
+        // not a bump.
+        assert!(at(Prop::Sign) > 2.5);
     }
 
     #[test]
     fn a_bin_gives_way_more_easily_than_a_planter() {
         let mass = |prop: Prop| match prop.footing() {
             Footing::Loose(mass) => mass,
-            Footing::Bolted => f32::INFINITY,
+            Footing::Bolted(_) => f32::INFINITY,
         };
         assert!(mass(Prop::Bin) < mass(Prop::NewsBox));
         assert!(mass(Prop::NewsBox) < mass(Prop::Bench));
