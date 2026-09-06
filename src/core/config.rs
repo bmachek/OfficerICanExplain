@@ -18,6 +18,9 @@ pub struct GameConfig {
     pub bounce: BounceConfig,
     /// How quick this city's temper is.
     pub mood: MoodConfig,
+    /// And how much it enjoys watching things go wrong for other people.
+    #[serde(default)]
+    pub schadenfreude: SchadenfreudeConfig,
     pub camera: CameraConfig,
     pub audio: AudioConfig,
     /// What the renderer is allowed to spend. Resolved from a single quality
@@ -258,6 +261,47 @@ pub struct MoodConfig {
     pub grudge_speed: f32,
 }
 
+/// How the crowd reacts to chaos it merely *witnesses*.
+///
+/// The victim's side of a wallop was always felt (`mood::feeling`); this block
+/// tunes everybody else's: who laughs at a launch, how far a crash is funny
+/// and how close it stops being, and the geyser that throws passers-by.
+/// `#[serde(default)]` as a whole, so an options file from before the crowd
+/// had opinions still parses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchadenfreudeConfig {
+    /// How far away a wallop is witnessed at all, in metres.
+    pub watch_radius: f32,
+    /// Mood lift for an amused witness standing right next to the landing.
+    pub amusement: f32,
+    /// And the dip for an appalled one. Slightly stronger than the laugh, so
+    /// a street that watches a massacre trends sour rather than giddy.
+    pub indignation: f32,
+    /// A crash is funny out to here, in metres...
+    pub crash_radius: f32,
+    /// ...and alarming inside here, where it is happening *to* you.
+    pub alarm_radius: f32,
+    /// Impact severity, in m/s lost, below which nobody even looks up.
+    pub crash_stir: f32,
+    /// Mood lift per sheared prop at full send, right next to it.
+    pub sproing_delight: f32,
+    /// Throw speed of a geyser at full pressure, in m/s. Deliberately below
+    /// `MoodConfig::bop_limit`: the ride reads as a treat, not an insult —
+    /// there is a test holding the two in that order.
+    pub geyser_toss: f32,
+    /// How close to the stump somebody has to blunder to be thrown, in metres.
+    pub geyser_toss_radius: f32,
+    /// How far the crowd flees a geyser, in metres. Deliberately far short of
+    /// the vehicle scare radius: a crowd that fled the water perfectly would
+    /// never be tossed by it, and the toss is the joke.
+    pub geyser_scare_radius: f32,
+    /// Spin, in rad/s, above which a vehicle counts as a tumbling wreck worth
+    /// running from even when it is barely translating.
+    pub wreck_spin: f32,
+    /// Mood cost of taking fright, scaled up by the fuse.
+    pub fright_dip: f32,
+}
+
 /// The mixer. Three numbers rather than one, because the background bed and
 /// the things that happen in front of it want independent control.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -343,6 +387,20 @@ impl Default for GameConfig {
                 grudge_seconds: 7.0,
                 grudge_speed: 5.2,
             },
+            schadenfreude: SchadenfreudeConfig {
+                watch_radius: 18.0,
+                amusement: 0.12,
+                indignation: 0.14,
+                crash_radius: 25.0,
+                alarm_radius: 6.0,
+                crash_stir: 3.0,
+                sproing_delight: 0.10,
+                geyser_toss: 5.8,
+                geyser_toss_radius: 1.2,
+                geyser_scare_radius: 5.0,
+                wreck_spin: 3.0,
+                fright_dip: 0.06,
+            },
             camera: CameraConfig {
                 speed: 25.0,
                 boost_multiplier: 5.0,
@@ -365,6 +423,12 @@ impl Default for GameConfig {
 impl Default for CameraConfig {
     fn default() -> Self {
         GameConfig::default().camera
+    }
+}
+
+impl Default for SchadenfreudeConfig {
+    fn default() -> Self {
+        GameConfig::default().schadenfreude
     }
 }
 
@@ -407,6 +471,20 @@ mod tests {
         let parsed: GameConfig = ron::from_str(&text).expect("old options should parse");
         assert_eq!(parsed.audio.master, 0.42);
         assert_eq!(parsed.window.resolution, Resolution::default());
+    }
+
+    #[test]
+    fn an_options_file_without_a_schadenfreude_section_still_parses() {
+        // The whole config as it was before the crowd had opinions about
+        // other people's misfortunes: the `schadenfreude` field absent.
+        let mut old = ron::ser::to_string(&GameConfig::default()).unwrap();
+        let start = old.find("schadenfreude:").unwrap();
+        let end = old[start..].find("),").unwrap() + start + 2;
+        old.replace_range(start..end, "");
+        let parsed: GameConfig = ron::from_str(&old).expect("old options should parse");
+        let fresh = GameConfig::default().schadenfreude;
+        assert_eq!(parsed.schadenfreude.watch_radius, fresh.watch_radius);
+        assert_eq!(parsed.schadenfreude.geyser_toss, fresh.geyser_toss);
     }
 
     #[test]

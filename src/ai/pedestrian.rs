@@ -33,7 +33,17 @@ use crate::mood::voice::Voicebox;
 use crate::player::on_foot::Player;
 use crate::world::City;
 use crate::world::buildings::SIDEWALK_HEIGHT;
+use crate::world::mayhem::{Geyser, SentFlying};
 use crate::world::roadgraph::NodeId;
+
+/// Somebody just took fright. Written on the calm→panicked edge only, so a
+/// listener — the mood dip in `mood::schadenfreude`, the squeal in
+/// `mood::voice` — hears one fright per scare, not one per frame of it.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct TookFright {
+    pub entity: Entity,
+    pub position: Vec3,
+}
 
 const POPULATION: usize = 45;
 const SPAWN_MIN: f32 = 25.0;
@@ -96,6 +106,14 @@ pub fn spring(mood: f32, max: f32) -> f32 {
     (1.0 + 0.5 * mood).clamp(0.85, max)
 }
 
+/// Whether a vehicle is worth running from. Speed is the obvious half; the
+/// spin gate is for a wreck a crash left tumbling — it may be barely
+/// translating, but a car spinning like a dropped coin is bearing down on
+/// *somebody* whatever its ground speed says.
+pub fn is_scary(speed: f32, spin: f32, wreck_spin: f32) -> bool {
+    speed > SCARE_SPEED || spin > wreck_spin
+}
+
 #[derive(Component)]
 pub struct Pedestrian {
     pub from: NodeId,
@@ -142,6 +160,7 @@ pub struct PedestrianPlugin;
 impl Plugin for PedestrianPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PedestrianTimer>()
+            .add_message::<TookFright>()
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
@@ -314,20 +333,57 @@ fn walk_pavements(
     city: Res<City>,
     config: Res<GameConfig>,
     mut rng: ResMut<PedestrianRng>,
-    vehicles: Query<(&Transform, &LinearVelocity), With<crate::vehicle::spawn::Vehicle>>,
+    mut frights: MessageWriter<TookFright>,
+    vehicles: Query<
+        (&Transform, &LinearVelocity, Option<&AngularVelocity>),
+        With<crate::vehicle::spawn::Vehicle>,
+    >,
+    // `Without<Pedestrian>` on both read-only queries is the disjointness
+    // proof, not a behaviour change — no geyser or flying prop is ever a
+    // pedestrian, but Bevy cannot know that without the filter, and the
+    // `&mut Transform` below makes the overlap a B0001 panic at first run.
+    // (The capture harness caught exactly that; see CLAUDE.md's trap list.)
+    geysers: Query<(&Geyser, &Transform), Without<Pedestrian>>,
+    flying: Query<(&Transform, &LinearVelocity), (With<SentFlying>, Without<Pedestrian>)>,
     mut pedestrians: Query<
-        (&mut Pedestrian, &mut Bouncer, &mut Transform, &Mood),
+        (Entity, &mut Pedestrian, &mut Bouncer, &mut Transform, &Mood),
         (Without<crate::vehicle::spawn::Vehicle>, Without<Launched>),
     >,
 ) {
     let dt = time.delta_secs();
 
-    // Anything moving fast enough to be worth running from.
-    let threats: Vec<(Vec2, f32)> = vehicles
+    // Anything worth running from, each with how wide a berth it deserves.
+    // A vehicle is scary when it is fast — or when it is spinning like a
+    // dropped coin, because a wreck tumbling across a junction is bearing
+    // down on somebody whatever its ground speed says. A geyser gets a
+    // deliberately tight radius: a crowd that fled the water perfectly would
+    // never be tossed by it, and the toss is the joke (`world::mayhem`).
+    // And a sheared prop still cartwheeling is a flying phone box, which any
+    // sensible flummi gives the full berth.
+    let tune = &config.schadenfreude;
+    let mut threats: Vec<(Vec2, f32)> = vehicles
         .iter()
-        .filter(|(_, velocity)| velocity.length() > SCARE_SPEED)
-        .map(|(transform, velocity)| (transform.translation.xz(), velocity.length()))
+        .filter(|(_, velocity, spin)| {
+            is_scary(
+                velocity.length(),
+                spin.map(|spin| spin.length()).unwrap_or(0.0),
+                tune.wreck_spin,
+            )
+        })
+        .map(|(transform, ..)| (transform.translation.xz(), SCARE_RADIUS))
         .collect();
+    threats.extend(
+        geysers
+            .iter()
+            .filter(|(geyser, _)| crate::world::mayhem::pressure(geyser.life.fraction()) > 0.2)
+            .map(|(_, transform)| (transform.translation.xz(), tune.geyser_scare_radius)),
+    );
+    threats.extend(
+        flying
+            .iter()
+            .filter(|(_, velocity)| velocity.length() > 4.0)
+            .map(|(transform, _)| (transform.translation.xz(), SCARE_RADIUS)),
+    );
 
     *report += dt;
     let announce = *report > 1.0;
@@ -336,7 +392,7 @@ fn walk_pavements(
     }
     let mut sample = None;
 
-    for (mut pedestrian, mut bouncer, mut transform, mood) in &mut pedestrians {
+    for (entity, mut pedestrian, mut bouncer, mut transform, mood) in &mut pedestrians {
         let position = transform.translation.xz();
         let a = city.graph.node(pedestrian.from).pos;
         let b = city.graph.node(pedestrian.to).pos;
@@ -376,13 +432,23 @@ fn walk_pavements(
         let mut heading = (target - position).normalize_or_zero();
 
         // Bolt away from anything bearing down on them.
+        let was_calm = pedestrian.panic <= 0.0;
         pedestrian.panic = (pedestrian.panic - dt).max(0.0);
-        for (threat, _) in &threats {
+        for (threat, berth) in &threats {
             let away = position - *threat;
-            if away.length() < SCARE_RADIUS {
+            if away.length() < *berth {
                 pedestrian.panic = 1.6;
                 heading = (heading + away.normalize_or_zero() * 2.0).normalize_or_zero();
             }
+        }
+        // Announced on the calm→panicked edge only, so the listeners — the
+        // mood dip, the squeal — hear one fright per scare rather than sixty
+        // a second for as long as the threat stays close.
+        if was_calm && pedestrian.panic > 0.0 {
+            frights.write(TookFright {
+                entity,
+                position: transform.translation,
+            });
         }
 
         let speed = if pedestrian.panic > 0.0 {
@@ -485,6 +551,17 @@ mod tests {
         assert!(spring(-1.0, max) >= 0.85);
         // The config ceiling must actually be reachable, or the dial is dead.
         assert_eq!(spring(1.0, max), max);
+    }
+
+    #[test]
+    fn a_tumbling_wreck_scares_the_pavement_even_when_it_is_slow() {
+        let wreck_spin = GameConfig::default().schadenfreude.wreck_spin;
+        // Sliding on its roof at walking pace, spinning hard: still a threat.
+        assert!(is_scary(1.0, wreck_spin + 1.0, wreck_spin));
+        // Parked and still is neither.
+        assert!(!is_scary(0.0, 0.0, wreck_spin));
+        // And ordinary traffic scares by speed alone, as it always did.
+        assert!(is_scary(SCARE_SPEED + 0.1, 0.0, wreck_spin));
     }
 
     #[test]

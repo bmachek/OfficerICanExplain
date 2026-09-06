@@ -85,11 +85,11 @@ done
 # Sounds with no entry here stay synthesised — the fallback is per sound, and
 # `audio::files` says so in the log at startup. That is currently the screech
 # (deliberately synth: it has to track slip continuously), the spoken flummi
-# voices (instruments by design, see `audio::bank`), and the three mouth
-# noises nobody has recorded under a compatible licence yet: raspberry, fart
-# and sorry. The bank loads each by name the moment a file appears, so a
-# recording dropped into assets/sounds/ by hand works without touching this
-# script.
+# voices (instruments by design, see `audio::bank`), and the four mouth
+# noises nobody has recorded under a compatible licence yet: raspberry, fart,
+# sorry and the fright squeal. The bank loads each by name the moment a file
+# appears, so a recording dropped into assets/sounds/ by hand works without
+# touching this script.
 SOUNDS_DEST="assets/sounds"
 SOUNDS=(
     "boing|https://opengameart.org/sites/default/files/boing.flac"
@@ -120,11 +120,14 @@ CAR_PACK=(
 )
 # And the taunt rotation's recordable half, from rubberduck's CC0 creature
 # pack. cough_03 is the double cough — performed, like the synthesised one —
-# and spit_01 is the closest to the synthesised length.
+# spit_01 is the closest to the synthesised length, and burp_02 is the longer
+# of the pack's two belches, which is the funnier one by the usual rule that
+# a burp is funny in proportion to how long it goes on.
 CREATURE_PACK_URL="https://opengameart.org/sites/default/files/80-CC0-creature-SFX_0.zip"
 CREATURE_PACK=(
     "cough|cough_03.ogg"
     "spit|spit_01.ogg"
+    "burp|burp_02.ogg"
 )
 # Footsteps and the traffic bed, from rubberduck's second CC0 SFX hundred.
 # The highway loop *is* the city ambience: what the mood mixer wants from

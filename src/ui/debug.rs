@@ -98,6 +98,9 @@ fn tuning_panel(
             mood_section(ui, &mut commands, &mut config, &mut tempers, &city, &crowd);
 
             ui.separator();
+            schadenfreude_section(ui, &mut config);
+
+            ui.separator();
             weather_section(ui, &mut weather, &mut config);
 
             ui.separator();
@@ -153,6 +156,25 @@ fn bounce_section(ui: &mut egui::Ui, config: &mut GameConfig) {
     ui.add(egui::Slider::new(&mut b.player_hop_scale, 0.0..=1.5).text("player hop"));
     ui.add(egui::Slider::new(&mut b.npc_spring_max, 1.0..=2.5).text("npc spring max"));
     ui.add(egui::Slider::new(&mut b.squash, 0.0..=0.8).text("squash"));
+}
+
+/// The audience dials: what the crowd makes of chaos it only watches.
+fn schadenfreude_section(ui: &mut egui::Ui, config: &mut GameConfig) {
+    ui.label(egui::RichText::new("schadenfreude").strong());
+    let s = &mut config.schadenfreude;
+    ui.add(egui::Slider::new(&mut s.watch_radius, 0.0..=40.0).text("watch m"));
+    ui.add(egui::Slider::new(&mut s.amusement, 0.0..=1.0).text("amusement"));
+    ui.add(egui::Slider::new(&mut s.indignation, 0.0..=1.0).text("indignation"));
+    ui.add(egui::Slider::new(&mut s.crash_radius, 0.0..=40.0).text("crash m"));
+    ui.add(egui::Slider::new(&mut s.alarm_radius, 0.0..=20.0).text("alarm m"));
+    ui.add(egui::Slider::new(&mut s.crash_stir, 0.0..=12.0).text("crash stir m/s"));
+    ui.add(egui::Slider::new(&mut s.sproing_delight, 0.0..=1.0).text("sproing delight"));
+    ui.add(egui::Slider::new(&mut s.geyser_toss, 0.0..=12.0).text("geyser toss m/s"));
+    ui.label(egui::RichText::new("past the bop limit the ride becomes an insult").weak());
+    ui.add(egui::Slider::new(&mut s.geyser_toss_radius, 0.0..=4.0).text("toss reach m"));
+    ui.add(egui::Slider::new(&mut s.geyser_scare_radius, 0.0..=14.0).text("geyser scare m"));
+    ui.add(egui::Slider::new(&mut s.wreck_spin, 0.0..=10.0).text("wreck spin rad/s"));
+    ui.add(egui::Slider::new(&mut s.fright_dip, 0.0..=0.5).text("fright dip"));
 }
 
 fn mood_section(

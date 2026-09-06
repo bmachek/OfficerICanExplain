@@ -330,6 +330,18 @@ fn root_screen(
         settings::save(config, keybindings);
         exit.write(AppExit::Success);
     }
+
+    // The dedication. In English on purpose, and exempt from the
+    // player-facing-text-is-German rule: it is not interface, it is an
+    // inscription, and it reads the same in every build.
+    ui.add_space(10.0);
+    ui.vertical_centered(|ui| {
+        ui.label(
+            egui::RichText::new("For Daniel — the best son anyone could imagine.")
+                .weak()
+                .italics(),
+        );
+    });
 }
 
 fn save_load_screen(

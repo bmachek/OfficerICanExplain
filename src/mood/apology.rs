@@ -61,7 +61,9 @@ impl Plugin for ApologyPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, build_flower).add_systems(
             Update,
-            (player_apologizes, fly_flowers).chain().in_set(GameSet::Ai),
+            (player_apologizes, npcs_apologize, fly_flowers)
+                .chain()
+                .in_set(GameSet::Ai),
         );
     }
 }
@@ -165,12 +167,23 @@ fn player_apologizes(
         return;
     };
 
-    // Out of the hand, not the navel, and aimed at the chest, not the feet.
+    spawn_flower(&mut commands, &assets, player, target, from, at);
+}
+
+/// Out of the hand, not the navel, and aimed at the chest, not the feet.
+fn spawn_flower(
+    commands: &mut Commands,
+    assets: &FlowerAssets,
+    by: Entity,
+    target: Entity,
+    from: Vec3,
+    at: Vec3,
+) {
     commands
         .spawn((
             Name::new("Flower"),
             Flower {
-                by: player,
+                by,
                 target,
                 age: 0.0,
             },
@@ -202,6 +215,64 @@ fn player_apologizes(
                 ));
             }
         });
+}
+
+/// Chance per second that a flummi being hunted sues for peace.
+const CONTRITION: f32 = 0.35;
+/// Mood below which they are too sour to say sorry to anybody.
+const CONTRITE: f32 = 0.1;
+
+/// Peace-making was player-exclusive, which was asymmetric with everything
+/// else in `mood` — NPCs taunt, cheer, grudge and pirouette through exactly
+/// the player's code paths. Now the flower is shared too: a flummi that
+/// notices it is being *hunted* (it is the `against` of somebody's grudge)
+/// and is in a good enough mood turns and throws one at its pursuer. The
+/// scene it makes is the point: chase, lob, catch, thank-you pirouette, feud
+/// over — a whole street soap with no player anywhere in it.
+fn npcs_apologize(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<GameConfig>,
+    assets: Res<FlowerAssets>,
+    bank: Option<Res<SoundBank>>,
+    mut rng: ResMut<AudioRng>,
+    grudges: Query<(Entity, &Grudge)>,
+    holders: Query<&Transform, Without<Player>>,
+    mut culprits: Query<(&Transform, &Mood, &mut Provoker), Without<Player>>,
+) {
+    let dt = time.delta_secs();
+    for (holder, grudge) in &grudges {
+        let Ok((transform, mood, mut provoker)) = culprits.get_mut(grudge.against) else {
+            continue;
+        };
+        if mood.value < CONTRITE || provoker.cooldown > 0.0 {
+            continue;
+        }
+        if rng.random::<f32>() > CONTRITION * dt {
+            continue;
+        }
+        let Ok(pursuer) = holders.get(holder) else {
+            continue;
+        };
+        let at = pursuer.translation;
+        if transform.translation.distance(at) > config.mood.apology_range {
+            continue;
+        }
+        // Twice the player's rest: an NPC that machine-gunned flowers would
+        // drain every feud before anybody saw one.
+        provoker.cooldown = config.mood.provoke_rest * 2.0;
+
+        let from = transform.translation + Vec3::Y * 0.5;
+        if let Some(bank) = &bank {
+            commands.spawn((
+                AudioPlayer(bank.sorry.clone()),
+                crate::audio::spatial_once(effect_gain(&config, 0.7), 24.0)
+                    .with_speed(rng.random_range(0.9..1.15)),
+                Transform::from_translation(from),
+            ));
+        }
+        spawn_flower(&mut commands, &assets, grudge.against, holder, from, at);
+    }
 }
 
 /// Flies every flower to its verdict: received, or wilted where it fell.

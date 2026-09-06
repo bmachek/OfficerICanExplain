@@ -4,6 +4,8 @@
 
 An open-world sandbox about being rude to strangers, built in Rust with Bevy.
 
+*For Daniel — the best son anyone could imagine.*
+
 Everything here is made of rubber. You do not walk, you bounce; so does
 everybody else, and so do the cars. There are no weapons — the two mouse
 buttons blow a raspberry and whistle — and nobody can be hurt, because there is
