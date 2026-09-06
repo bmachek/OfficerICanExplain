@@ -113,7 +113,7 @@ cargo run --features raytracing
 ## Development
 
 ```sh
-cargo test                                  # 279 tests
+cargo test                                  # 301 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -636,6 +636,44 @@ ring points straddling the belt are pinned to it, which turns the step into a
 right angle no amount of tessellation can soften, and `split_creases` then
 duplicates the vertices along it so smoothing stops averaging across the fold.
 
+A greenhouse is glazed by cutting its own frame out of itself. The cabin is
+lofted once as a glass tube, and the pressings — the roof, the A, B and C
+pillars, the cowl sides, the rear quarters — are patches sampled off that same
+loft and lifted six millimetres clear of it. There is no separate pillar shape
+to model and nothing to keep in step: which part of the surface is steel and
+which is glass falls out of the two loft coordinates, so a pillar always agrees
+with the rake above it, and retuning a cabin moves both at once. What is left
+uncut is the daylight opening, and the table is written so the roof's ends are
+exactly where the pillars stop — the screen and the backlight are the gaps.
+
+Behind the glass there is a car. The same cabin loft is built a second time at
+ninety-eight and a half percent scale with its triangles wound inside out, which
+leaves backface culling showing the *far* wall of the interior, lit as though it
+faced you. Doing that in geometry rather than with a front-face cull is not a
+preference: a two-sided material does not survive the deferred path. Inside it
+are seats, head restraints and a wheel, all sized as fractions of the cabin's
+own headroom rather than in metres — written in metres they stood above the
+roofline of anything with a low roof and read as roll hoops on a convertible.
+Everything in there is very dark, for the same reason the rooms behind the
+windows are: the fragment is shaded by the same sun as the roof over it, so the
+number has to stand for the trim's albedo *and* for how little daylight gets in.
+
+Everything bolted to a car is measured off its own profile rather than off the
+collider box — lamps, bumpers, grille, mirrors, tailpipe, plates. A mount typed
+in by hand drifts from lofted bodywork silently, and the failure looks like a
+styling decision until somebody measures it: the mirrors were buried in the
+doors because they were mounted on the cabin's cross-section, which is a fifth
+of a metre narrower than the flank they belong on. Each mount is a station on a
+section at a stated fraction of its height, and the tests ask what would
+otherwise go unnoticed — that a lamp is set into the nose rather than bolted
+beside it, that the grille stops at the lamps' inner edges and not their
+centres, that nothing inside pokes out through the roof.
+
+Number plates are drawn: a 5×7 font, eight invented registrations, one material
+each shared city-wide, and which one a car wears hashed from where it spawned so
+it survives the chunk streaming out and back and no two cars parked nose to tail
+match.
+
 Wheels are surfaces of revolution with the tread and the spokes painted on and
 normal-mapped rather than modelled — geometry that fine is a blur above walking
 pace.
@@ -645,11 +683,31 @@ the occasional colour, because an evenly sampled rainbow reads as a toy box and
 it is the proportion of dull cars that makes the red one feel deliberate. Each
 colour carries its own flake content, and it goes on under a clearcoat.
 
+The flake itself is a normal map, tiled down to hand scale because the loft's
+UVs run nought to one over a whole car. Two frequencies: a facet every few
+texels for the aluminium suspended in the basecoat, and a much broader, much
+shallower undulation for the lacquer over it failing to settle flat. Neither
+of them is `anisotropy_strength`, which is what this was going to be — see the
+limitations.
+
 Crashes beat the metal in. The first real impact copies that car's panels off
 the archetype's shared mesh — everything else keeps batching — and pushes a
 dent into them along the direction the blow arrived from. The lacquer dulls, the
 flake stops reading, and past about a third gone the colour cooks off towards
-soot; below thirty percent it smokes.
+soot; below thirty percent it smokes. Damage recomputes the paint from the spec
+rather than nudging what is there, because a material edited in place drifts and
+a repaired car would stay dull — and it goes through the same function that
+paints a new one, since two copies of a formula agree only until somebody edits
+one.
+
+Headlights are real spot lights, given to cars with someone at the wheel and
+taken back at dawn; parked cars are excluded, because several hundred of them
+would be several hundred spot lights lighting the inside of their own bumpers.
+Above the fog-and-lights tier a beam is volumetric, which is what turns a lit
+patch of road into a pair of cones coming at you through the drizzle. The
+component goes on at the moment the beam is spawned rather than being attached
+by `render::volumetrics` — a beam is born at dusk and dies at dawn, and that
+system attaches its lights once and then sleeps on a change detector.
 
 ## Audio
 
@@ -727,6 +785,36 @@ pursuit, and everything but the player's own car is positioned in the world.
   nothing else. Furniture would need a second box test per fragment and a reason
   to believe anybody would look.
 
+- Metallic flake is not `anisotropy_strength`, and orange peel is not a
+  `clearcoat_normal_texture`. Both were the plan and both were measured out:
+  the deferred g-buffer carries base colour and roughness, emissive,
+  reflectance, metallic, occlusion, and clearcoat strength and roughness at
+  four bits each, plus exactly one octahedral normal. There is nowhere for a
+  second normal or a tangent direction to go, so those two fields are dropped
+  between the prepass and the lighting pass without a word. Anisotropy was the
+  wrong model anyway — it stretches the specular lobe along the tangent, which
+  is brushed metal and hair, where flake is isotropic. One normal map carries
+  both effects instead, which is the form that survives.
+
+- Car glass does not refract. `specular_transmission` was the plan and it was
+  measured out too: through a five-millimetre pane at a windscreen's rake, the
+  ray behind it is displaced by under two millimetres, which is sub-pixel at
+  any distance a car is ever seen from — for the cost of a transmissive pass
+  with its own copy of the screen. What reads as glass is a Fresnel edge and a
+  cabin behind it, and both of those are cheap.
+
+- A van's glazing is opaque. It lies *on* the front of the box rather than in a
+  hole through it, because a van has no greenhouse of its own to loft, so there
+  is no cab behind it to see — only the outside of the bodywork it is lying on.
+  It is also duller than a car's: at a windscreen's own roughness, an opaque
+  pane on a nose raked that hard is a mirror pointed at the sky and comes back
+  indistinguishable from paint.
+
+- Every car in the city shares eight registrations. One plate is one texture
+  and one material, and a plate per car would be a material per car in a place
+  that has several hundred of them parked. Eight is enough that a street does
+  not obviously repeat and not enough to survive being looked for.
+
 - Screen-space reflections can only reflect what is on screen. A car just out of
   frame stops appearing in the road under it. Light probes do not have that
   problem and cannot reflect anything that moves; the two are complementary and
@@ -735,7 +823,6 @@ pursuit, and everything but the player's own car is positioned in the world.
 - Pedestrians cross roads wherever their route turns, rather than at crossings.
 - Traffic has no right-of-way rules at junctions; it brakes for obstacles only —
   the signals above are the visible half of a rule that is not implemented.
-- Vehicle damage is not visually modelled — cars are wrecked, not deformed.
 - Facades are procedural, so walls read as materials rather than photographs.
   Scanning them needs a custom material with a detail UV; see above.
 - Six wall sets across five districts, so a long enough walk repeats. What

@@ -43,6 +43,14 @@ pub struct TrimKit {
     pub plates: Vec<Handle<StandardMaterial>>,
 }
 
+/// How far a plate stands off the station it is measured at.
+///
+/// Far enough to clear the bumper, which is mounted off the same station and is
+/// a hand deep: a plate an inch out is *inside* it, which does not fail and
+/// does not warn — it comes back as a dark rectangle where a registration
+/// should be.
+const PLATE_STAND_OFF: f32 = 0.135;
+
 /// Outer radius of the steering wheel mesh, before it is scaled to a cabin.
 const WHEEL_RADIUS: f32 = 0.163;
 
@@ -408,8 +416,8 @@ pub fn fit(
     // and the front one is turned the other way.
     let registration = kit.plates[super::plate::registration_for(at)].clone();
     for (z, yaw) in [
-        (f.nose - 0.055, std::f32::consts::PI),
-        (f.tail + 0.055, 0.0),
+        (f.nose - PLATE_STAND_OFF, std::f32::consts::PI),
+        (f.tail + PLATE_STAND_OFF, 0.0),
     ] {
         parent.spawn((
             Mesh3d(kit.plate.clone()),
@@ -598,6 +606,47 @@ mod tests {
                 "{}: the plate is not between the bumper and the lamps",
                 spec.display_name
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod plate_fit {
+    use super::*;
+
+    #[test]
+    fn a_plate_is_not_buried_in_the_bumper_behind_it() {
+        // Both are mounted off the same station, and the bumper is a box a
+        // hand deep. A plate an inch off the station is inside it, which does
+        // not fail, does not warn, and comes back as a dark rectangle where a
+        // registration should be.
+        for class in VehicleClass::ALL {
+            let spec = class.spec();
+            let f = Fittings::of(class, &spec);
+            for (station, sign) in [(f.nose, -1.0f32), (f.tail, 1.0)] {
+                let bumper_face = station + sign * (0.06 + 0.14 * 0.5);
+                let plate = station + sign * PLATE_STAND_OFF;
+                assert!(
+                    plate.abs() >= bumper_face.abs(),
+                    "{class:?}: the plate at {plate} is inside a bumper reaching {bumper_face}"
+                );
+                // Standing proud, the plate is free to overlap the bumper —
+                // which is where half the cars on the road carry theirs. What
+                // it must not do is hang below the car or climb over the
+                // lamps.
+                let (bottom, top) = (
+                    f.plate_y - super::super::plate::SIZE.y * 0.5,
+                    f.plate_y + super::super::plate::SIZE.y * 0.5,
+                );
+                assert!(
+                    bottom >= f.bumper_y - f.bumper_half.y,
+                    "{class:?}: the plate's bottom edge at {bottom} hangs below the car"
+                );
+                assert!(
+                    top <= f.lamp_y,
+                    "{class:?}: the plate at {top} is over the headlights"
+                );
+            }
         }
     }
 }
