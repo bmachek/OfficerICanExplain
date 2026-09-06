@@ -102,19 +102,25 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         birdsong: sounds.add(looped("birdsong", 0.5, birdsong_loop)),
         uproar: sounds.add(looped("uproar", 0.6, uproar_loop)),
 
-        // The voices are deliberately not replaceable by files: a flummi's
-        // voice is a source-filter instrument pitched per speaker at
-        // playback, and a recording of a human would put an actual human in
-        // a city that must not contain one.
+        // The spoken voices are deliberately not replaceable by files: a
+        // flummi's voice is a source-filter instrument pitched per speaker at
+        // playback, and a recording of a human *talking* would put an actual
+        // human in a city that must not contain one. That rule used to cover
+        // the taunt rotation and the sorry too, which was drawing the line in
+        // the wrong place: those are mouth noises rather than speech — nobody
+        // hears a word in a recorded cough — and they play with per-shot
+        // jitter, not a per-speaker pitch. So they take recordings like every
+        // other effect, and the whistle, giggle, grumble, curse and gasp stay
+        // instruments.
         whistle: std::array::from_fn(|take| sounds.add(whistle(take))),
         giggle: sounds.add(giggle()),
         grumble: std::array::from_fn(|take| sounds.add(grumble(take))),
         curse: std::array::from_fn(|take| sounds.add(curse(take))),
-        raspberry: sounds.add(raspberry()),
-        fart: sounds.add(fart()),
-        cough: sounds.add(cough()),
-        spit: sounds.add(spit()),
-        sorry: sounds.add(sorry()),
+        raspberry: sounds.add(shot("raspberry", 0.85, raspberry)),
+        fart: sounds.add(shot("fart", 0.85, fart)),
+        cough: sounds.add(shot("cough", 0.8, cough)),
+        spit: sounds.add(shot("spit", 0.7, spit)),
+        sorry: sounds.add(shot("sorry", 0.6, sorry)),
         gasp: sounds.add(gasp()),
     }
 }

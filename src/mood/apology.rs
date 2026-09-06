@@ -23,7 +23,7 @@ use super::feeling::Mood;
 use super::grudge::{Grudge, Pirouette};
 use super::provoke::Provoker;
 use crate::audio::bank::SoundBank;
-use crate::audio::{AudioRng, effect_gain, spatial_once};
+use crate::audio::{AudioRng, close_once, effect_gain};
 use crate::core::config::GameConfig;
 use crate::core::schedule::GameSet;
 use crate::player::input::Action;
@@ -113,7 +113,6 @@ pub fn throw_velocity(from: Vec3, to: Vec3) -> Vec3 {
 
 fn player_apologizes(
     mut commands: Commands,
-    time: Res<Time>,
     config: Res<GameConfig>,
     assets: Res<FlowerAssets>,
     bank: Option<Res<SoundBank>>,
@@ -125,10 +124,27 @@ fn player_apologizes(
         return;
     };
     // The cooldown is shared with the taunt and the cheer on purpose: sorry,
-    // and a raspberry in the same breath, is neither.
-    provoker.cooldown = (provoker.cooldown - time.delta_secs()).max(0.0);
+    // and a raspberry in the same breath, is neither. Only read here — the
+    // provoke system already ages it, and both of them subtracting the same
+    // frame's time made every rest half as long as the dial says.
     if provoker.cooldown > 0.0 || !actions.just_pressed(&Action::Apologize) {
         return;
+    }
+    provoker.cooldown = config.mood.provoke_rest;
+
+    // The voice comes before the question of who is listening: an apology to
+    // an empty street is still audibly an apology, and a button that stays
+    // silent whenever nobody happens to be in range reads as a button that
+    // does not work. Only the flower needs somebody to catch it. And it is
+    // the player's own mouth, so it plays flat in both ears rather than
+    // through the spatial mixer — the same rule as their footsteps.
+    let from = transform.translation + Vec3::Y * 0.5;
+    if let Some(bank) = bank {
+        commands.spawn((
+            AudioPlayer(bank.sorry.clone()),
+            close_once(effect_gain(&config, 0.8)).with_speed(rng.random_range(0.95..1.1)),
+            Transform::from_translation(from),
+        ));
     }
 
     // Whoever holds a grudge against the player, else whoever is nearest:
@@ -148,10 +164,8 @@ fn player_apologizes(
     let Some((target, at, _, _)) = target else {
         return;
     };
-    provoker.cooldown = config.mood.provoke_rest;
 
     // Out of the hand, not the navel, and aimed at the chest, not the feet.
-    let from = transform.translation + Vec3::Y * 0.5;
     commands
         .spawn((
             Name::new("Flower"),
@@ -188,14 +202,6 @@ fn player_apologizes(
                 ));
             }
         });
-
-    if let Some(bank) = bank {
-        commands.spawn((
-            AudioPlayer(bank.sorry.clone()),
-            spatial_once(effect_gain(&config, 0.8), 16.0).with_speed(rng.random_range(0.95..1.1)),
-            Transform::from_translation(from),
-        ));
-    }
 }
 
 /// Flies every flower to its verdict: received, or wilted where it fell.

@@ -60,6 +60,26 @@ mod gain {
     pub const DOOR: f32 = 0.6;
     pub const ENGINE: f32 = 0.55;
     pub const SCREECH: f32 = 0.55;
+    /// The always-on ambient bed is filtered noise, and at full level the ear
+    /// stops reading it as a city behind the buildings and starts reading it
+    /// as the mixer hissing. Felt more than heard, as its synth promises.
+    pub const TRAFFIC_BED: f32 = 0.4;
+}
+
+/// How much of a vehicle's voice survives its distance from the player.
+///
+/// Rodio attenuates by inverse square and never actually reaches zero, and
+/// with a district's worth of traffic simulated at once those leftover tails
+/// sum into a permanent grey wash under everything. So distance gets a second,
+/// steeper hand on the fader: full inside `CLEAR`, genuinely nothing past
+/// `GONE`, squared in between so the drop accelerates on the way out.
+pub fn hush(distance: f32) -> f32 {
+    /// Inside this, the mixer's own attenuation is the whole story.
+    const CLEAR: f32 = 30.0;
+    /// Beyond this a running engine is scenery, not sound.
+    const GONE: f32 = 55.0;
+    let fade = ((GONE - distance) / (GONE - CLEAR)).clamp(0.0, 1.0);
+    fade * fade
 }
 
 /// A looping sound belonging to a vehicle.
@@ -405,13 +425,19 @@ fn manage_vehicle_voices(
 
 fn update_vehicle_voices(
     config: Res<GameConfig>,
-    vehicles: Query<(&VehicleState, &VehicleInput)>,
+    players: Query<&Transform, With<Player>>,
+    vehicles: Query<(&VehicleState, &VehicleInput, &Transform)>,
     mut voices: Query<(&Voice, &mut SpatialAudioSink)>,
 ) {
+    let ears = players
+        .single()
+        .map(|player| player.translation)
+        .unwrap_or_default();
     for (voice, mut sink) in &mut voices {
-        let Ok((state, input)) = vehicles.get(voice.owner) else {
+        let Ok((state, input, at)) = vehicles.get(voice.owner) else {
             continue;
         };
+        let heard = hush(at.translation.distance(ears));
         let speed_kph = state.speed_kph();
 
         let level = match voice.kind {
@@ -435,6 +461,7 @@ fn update_vehicle_voices(
 
         // A muted sink still remembers its volume, so unmuting lands on the
         // right level rather than on whatever it was before.
+        let level = level * heard;
         sink.set_volume(Volume::Linear(level));
         if level > 0.001 {
             if sink.is_muted() {
@@ -498,7 +525,7 @@ fn update_ambience(
     let base = config.audio.master * config.audio.ambience;
     for (bed, mut sink) in &mut beds {
         let level = match bed {
-            Ambience::Traffic => traffic,
+            Ambience::Traffic => traffic * gain::TRAFFIC_BED,
             Ambience::Birdsong => birds,
             Ambience::Uproar => uproar,
         };
@@ -575,6 +602,23 @@ mod tests {
                 "the city is still a city at mood {mood}"
             );
         }
+    }
+
+    #[test]
+    fn traffic_a_street_away_is_silent_rather_than_a_permanent_hiss() {
+        // Inverse square alone leaves every simulated engine a few percent
+        // audible forever, and thirty of those sum to a noise floor. The hush
+        // has to reach an actual zero, and reach it faster than a straight
+        // line so leaving earshot sounds like leaving rather than dimming.
+        assert_eq!(hush(0.0), 1.0);
+        assert_eq!(hush(25.0), 1.0, "close traffic is the mixer's business");
+        assert_eq!(hush(60.0), 0.0);
+        assert_eq!(hush(300.0), 0.0);
+        let midway = hush(42.5);
+        assert!(
+            midway > 0.0 && midway < 0.5,
+            "halfway out should be under half as loud, got {midway}"
+        );
     }
 
     #[test]
