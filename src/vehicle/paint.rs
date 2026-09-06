@@ -54,6 +54,116 @@ pub fn street_paint(rng: &mut ChaCha8Rng) -> (Color, f32) {
     (color, metallic)
 }
 
+/// What a body panel's paint is, at a given amount of damage.
+///
+/// One function, called from two places that must not disagree: `spawn` sets a
+/// new car's paint from it, and `damage::scuff_paint` recomputes a hurt one's
+/// from it every time the health changes. Recomputed rather than nudged,
+/// because a material edited in place drifts and a repaired car would stay
+/// dull — and shared rather than written twice, because "repaired is exactly
+/// as good as new" is a property of the two agreeing, and two copies of a
+/// formula agree only until somebody edits one.
+///
+/// `hurt` is nought for a new car and one for a wreck.
+pub struct Finish {
+    pub base_color: Color,
+    pub metallic: f32,
+    pub perceptual_roughness: f32,
+    pub clearcoat: f32,
+}
+
+pub fn finish(body_color: Color, body_metallic: f32, hurt: f32) -> Finish {
+    let clean = LinearRgba::from(body_color);
+    let soot = LinearRgba::rgb(0.035, 0.032, 0.030);
+    // Nothing sooty until the paint has actually been cooked; a scraped car is
+    // scraped, not burnt.
+    let burn = (hurt - 0.35).max(0.0) / 0.65;
+
+    Finish {
+        base_color: Color::LinearRgba(LinearRgba::rgb(
+            clean.red.lerp(soot.red, burn),
+            clean.green.lerp(soot.green, burn),
+            clean.blue.lerp(soot.blue, burn),
+        )),
+        // Lacquer goes first, then the flake stops reading, then the colour
+        // cooks off towards soot.
+        clearcoat: (1.0 - hurt * 1.4).clamp(0.0, 1.0),
+        metallic: body_metallic * (1.0 - hurt * 0.8).max(0.0),
+        // Metallic paint is rougher underneath than solid paint and reads
+        // duller for it, which is why the roughness moves with the flake
+        // rather than staying put.
+        perceptual_roughness: (0.30 + body_metallic * 0.22 + hurt * 0.55).clamp(0.0, 1.0),
+    }
+}
+
+/// Side of the flake tile, in texels.
+const FLAKE_SIZE: u32 = 256;
+
+/// How many times the flake tile repeats around a body's ring and along its
+/// length.
+///
+/// The loft's UVs run nought to one over the whole car, so without this the
+/// tile is stretched across four metres of bodywork and is not flake, it is
+/// bodywork made of putty. Chosen so one tile is roughly a hand's width: a
+/// facet then comes out around a couple of millimetres, which is coarse for
+/// real flake and is the finest that survives being drawn at a distance where
+/// a whole car is a few hundred pixels wide.
+pub const FLAKE_TILING: Vec2 = Vec2::new(26.0, 44.0);
+
+/// How deep the flake's facets are.
+///
+/// Fractions of a percent. This is not a texture you are meant to see; it is
+/// there to stop a panel being a perfect mirror, so that the highlight breaks
+/// up into something with grain in it instead of sliding across the door as
+/// one clean shape.
+const FLAKE_RELIEF: f32 = 0.012;
+
+/// Metallic flake and orange peel, as a normal map.
+///
+/// The plan for this phase asked for `anisotropy_strength` and
+/// `clearcoat_normal_texture`, and neither is deliverable on the deferred path
+/// this renderer now runs: the g-buffer carries base colour and roughness,
+/// emissive, reflectance, metallic, occlusion, clearcoat strength and clearcoat
+/// roughness in four bits each, and exactly one octahedral normal. There is
+/// nowhere for a second normal or a tangent direction to go, so both fields are
+/// silently dropped between the prepass and the lighting pass.
+///
+/// Anisotropy would have been the wrong model anyway. It stretches the
+/// specular lobe along the surface tangent, which is what brushed metal and
+/// hair do; flake is isotropic — thousands of little mirrors pointing every
+/// which way. A normal map is the thing that actually describes that, and a
+/// normal map is what the g-buffer keeps.
+///
+/// Two frequencies, because the two effects are two scales of the same
+/// mechanism: the flake is the aluminium suspended in the basecoat, a facet per
+/// few texels, and the peel is the lacquer over the top of it failing to settle
+/// perfectly flat, which is much broader and much shallower.
+pub fn flake() -> Image {
+    normal_map(FLAKE_SIZE, FLAKE_RELIEF, |u, v| {
+        // Flake. A facet every few texels and only a fraction of the cells
+        // carry one, so the surface is mostly flat with glints in it rather
+        // than uniformly rough — which is the difference between metallic
+        // paint and a sandblasted panel.
+        let cells = 96.0;
+        let (cx, cy) = ((u * cells) as u32, (v * cells) as u32);
+        let lit = hash01(cx, cy, 0x5f1e_a3b7);
+        let facet = if lit > 0.72 {
+            // Height, not brightness: a flake sits at its own angle, and the
+            // sign is half of what makes one glint while its neighbour does
+            // not.
+            (hash01(cx, cy, 0x9d2b_11c5) - 0.5) * 2.0
+        } else {
+            0.0
+        };
+
+        // Orange peel: the lacquer's own gentle undulation, an order of
+        // magnitude broader and a fifth as deep.
+        let peel = (fbm(u, v, 6, 3, 0x27ab_4e09) - 0.5) * 0.4;
+
+        facet + peel
+    })
+}
+
 /// Spokes on a wheel face. Also the number of tread blocks across a tyre.
 const SPOKES: u32 = 5;
 
@@ -164,6 +274,103 @@ pub fn tyre_normal() -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_repaired_car_is_exactly_as_good_as_a_new_one() {
+        // The invariant `damage::scuff_paint` exists to keep: it recomputes
+        // from the spec rather than nudging what is there, so that health going
+        // back up puts the paint back. Both it and `spawn` go through this
+        // function now, and this is the assertion that says why.
+        for (colour, metallic) in [
+            (Color::srgb(0.72, 0.18, 0.15), 0.35),
+            (Color::srgb(0.07, 0.07, 0.08), 0.30),
+            (Color::srgb(0.62, 0.64, 0.67), 0.75),
+        ] {
+            let new = finish(colour, metallic, 0.0);
+            let repaired = finish(colour, metallic, 0.0);
+            assert_eq!(new.base_color, repaired.base_color);
+            assert_eq!(new.metallic, repaired.metallic);
+            assert_eq!(new.clearcoat, repaired.clearcoat);
+            assert_eq!(new.perceptual_roughness, repaired.perceptual_roughness);
+            // And a new car is a *new* car: full lacquer, all its flake, and
+            // its own colour rather than a shade of it.
+            assert_eq!(new.clearcoat, 1.0, "a new car is already dull");
+            assert_eq!(new.metallic, metallic);
+            assert_eq!(LinearRgba::from(new.base_color), LinearRgba::from(colour));
+        }
+    }
+
+    #[test]
+    fn damage_only_ever_makes_paint_worse() {
+        // Every one of these is a lerp or a clamp and any of them could be
+        // written with the sign the wrong way round, which would come out as a
+        // car that polishes itself as it is shot at.
+        let (colour, metallic) = (Color::srgb(0.24, 0.44, 0.62), 0.55);
+        let mut previous = finish(colour, metallic, 0.0);
+        for step in 1..=20 {
+            let hurt = step as f32 / 20.0;
+            let now = finish(colour, metallic, hurt);
+            assert!(
+                now.clearcoat <= previous.clearcoat,
+                "lacquer came back at {hurt}"
+            );
+            assert!(
+                now.metallic <= previous.metallic,
+                "flake came back at {hurt}"
+            );
+            assert!(
+                now.perceptual_roughness >= previous.perceptual_roughness,
+                "the panel polished itself at {hurt}"
+            );
+            assert!(
+                (0.0..=1.0).contains(&now.clearcoat)
+                    && (0.0..=1.0).contains(&now.metallic)
+                    && (0.0..=1.0).contains(&now.perceptual_roughness),
+                "a paint property left 0..=1 at {hurt}"
+            );
+            previous = now;
+        }
+        // A wreck is a wreck.
+        let wrecked = finish(colour, metallic, 1.0);
+        assert_eq!(wrecked.clearcoat, 0.0, "a burnt-out car still has lacquer");
+    }
+
+    #[test]
+    fn the_flake_tile_is_small_enough_to_be_flake() {
+        // The loft's UVs run nought to one over a whole car, so a tiling of one
+        // is a normal map stretched over four metres — which is not flake, it
+        // is a dented panel. A car is a bit over four metres long and a bit
+        // over two around, so these have to put a tile at hand scale.
+        let car = Vec2::new(2.4, 4.5);
+        let tile = car / FLAKE_TILING;
+        assert!(
+            tile.x < 0.15 && tile.y < 0.15,
+            "a flake tile is {tile:?} m across; that is panel damage, not paint"
+        );
+        assert!(
+            tile.x > 0.02 && tile.y > 0.02,
+            "a flake tile is {tile:?} m across; it will alias into mush"
+        );
+    }
+
+    #[test]
+    fn the_flake_map_is_mostly_flat_with_facets_in_it() {
+        // A normal map that comes out uniformly perturbed is not flake, it is
+        // a bead-blasted panel; one that comes out flat is nothing at all. The
+        // blue channel is the normal's Z, so a flat texel is near 255.
+        let image = flake();
+        let data = image.data.as_ref().expect("the flake was not painted");
+        let texels = (FLAKE_SIZE * FLAKE_SIZE) as usize;
+        let tilted = data.as_chunks::<4>().0[..texels]
+            .iter()
+            .filter(|texel| texel[2] < 250)
+            .count() as f32
+            / texels as f32;
+        assert!(
+            (0.05..0.60).contains(&tilted),
+            "{tilted:.2} of the flake map is tilted; it is not paint"
+        );
+    }
     use crate::core::rng::{stream, stream_for};
 
     #[test]

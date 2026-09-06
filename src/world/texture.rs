@@ -160,18 +160,33 @@ pub fn downsample(src: &[u8], width: u32, height: u32, srgb: bool) -> (Vec<u8>, 
 /// Built with `new_uninit` rather than `Image::new` because the latter asserts
 /// that the data is exactly one mip level.
 pub fn painted(size: u32, format: TextureFormat, paint: impl Fn(f32, f32) -> [u8; 4]) -> Image {
-    let mut data = Vec::with_capacity((size * size * 4) as usize);
-    for y in 0..size {
-        for x in 0..size {
-            let u = (x as f32 + 0.5) / size as f32;
-            let v = (y as f32 + 0.5) / size as f32;
+    painted_rect(size, size, format, paint)
+}
+
+/// [`painted`], for something that is not square.
+///
+/// Everything tiled over a surface here is square, because that is what makes a
+/// tile; the exceptions are the things that are one object each and have their
+/// own proportions, like a number plate.
+pub fn painted_rect(
+    width: u32,
+    height: u32,
+    format: TextureFormat,
+    paint: impl Fn(f32, f32) -> [u8; 4],
+) -> Image {
+    let (full_width, full_height) = (width, height);
+    let mut data = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let u = (x as f32 + 0.5) / width as f32;
+            let v = (y as f32 + 0.5) / height as f32;
             data.extend_from_slice(&paint(u, v));
         }
     }
 
     let srgb = format == TextureFormat::Rgba8UnormSrgb;
     let mut level = data.clone();
-    let (mut width, mut height) = (size, size);
+    let (mut width, mut height) = (width, height);
     let mut levels = 1;
     while width > 1 || height > 1 {
         let (next, nw, nh) = downsample(&level, width, height, srgb);
@@ -184,8 +199,8 @@ pub fn painted(size: u32, format: TextureFormat, paint: impl Fn(f32, f32) -> [u8
 
     let mut image = Image::new_uninit(
         Extent3d {
-            width: size,
-            height: size,
+            width: full_width,
+            height: full_height,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,

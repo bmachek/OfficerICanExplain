@@ -281,21 +281,11 @@ pub fn scuff_paint(
                 continue;
             };
 
-            // Lacquer goes first, then the flake stops reading, then the
-            // colour cooks off towards soot.
-            paint.clearcoat = (1.0 - hurt * 1.4).clamp(0.0, 1.0);
-            paint.metallic = spec.body_metallic * (1.0 - hurt * 0.8).max(0.0);
-            paint.perceptual_roughness =
-                (0.30 + spec.body_metallic * 0.22 + hurt * 0.55).clamp(0.0, 1.0);
-
-            let clean = LinearRgba::from(spec.body_color);
-            let soot = LinearRgba::rgb(0.035, 0.032, 0.030);
-            let burn = (hurt - 0.35).max(0.0) / 0.65;
-            paint.base_color = Color::LinearRgba(LinearRgba::rgb(
-                clean.red.lerp(soot.red, burn),
-                clean.green.lerp(soot.green, burn),
-                clean.blue.lerp(soot.blue, burn),
-            ));
+            let finish = super::paint::finish(spec.body_color, spec.body_metallic, hurt);
+            paint.clearcoat = finish.clearcoat;
+            paint.metallic = finish.metallic;
+            paint.perceptual_roughness = finish.perceptual_roughness;
+            paint.base_color = finish.base_color;
         }
     }
 }

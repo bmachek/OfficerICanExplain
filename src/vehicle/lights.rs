@@ -119,33 +119,36 @@ fn lamps_for(
     spec: &VehicleSpec,
 ) {
     let half = spec.half_extents;
-    // Set into the flanks just behind the nose and just ahead of the tail,
-    // rather than pinned to the collider box: the bodywork tucks in at both
-    // ends, and a lamp on the box's corner hangs in the air beside the car.
-    let nose = -half.z * 0.95;
-    let tail = half.z * 0.96;
-    let lamp_y = half.y * 0.06;
-    let lamp_x = half.x * 0.44;
+    // Measured off the profile the bodywork was lofted from, not off the
+    // collider. Pinned to the box, a lamp sat at a height and a width the nose
+    // does not reach at that station and hung in the air beside the car — which
+    // is a thing you only notice once you look at a screenshot, because it
+    // reads as a styling choice until you measure it.
+    let fit = super::trim::Fittings::of(spec.class, spec);
+    let width = fit.lamp_width;
 
     for side in [-1.0f32, 1.0] {
+        // Set half a lamp in from the widest point the nose reaches at this
+        // height, so the outer edge lands on the bodywork rather than past it.
+        let x = side * (fit.lamp_x - width * 0.5);
         parent.spawn((
             Headlight,
             Mesh3d(assets.lens.clone()),
             MeshMaterial3d(assets.dark_glass.clone()),
-            Transform::from_xyz(side * lamp_x, lamp_y, nose).with_scale(Vec3::new(
-                half.x * 0.42,
-                half.y * 0.26,
-                0.06,
+            Transform::from_xyz(x, fit.lamp_y, fit.nose - 0.03).with_scale(Vec3::new(
+                width,
+                half.y * 0.22,
+                0.07,
             )),
         ));
         parent.spawn((
             TailLamp,
             Mesh3d(assets.lens.clone()),
             MeshMaterial3d(assets.dark_lamp.clone()),
-            Transform::from_xyz(side * lamp_x, lamp_y, tail).with_scale(Vec3::new(
-                half.x * 0.36,
-                half.y * 0.22,
-                0.06,
+            Transform::from_xyz(x, fit.lamp_y, fit.tail + 0.03).with_scale(Vec3::new(
+                width * 0.88,
+                half.y * 0.19,
+                0.07,
             )),
         ));
     }
@@ -236,8 +239,16 @@ fn switch_beams(
     >,
     mut beams: Query<&mut SpotLight, With<HeadlightBeam>>,
     existing: Query<&HeadlightBeam>,
+    config: Res<crate::core::config::GameConfig>,
 ) {
     let night = night_factor(clock.hours);
+    // A beam is born at dusk and dies at dawn, so it can never be picked up by
+    // `render::volumetrics`, which attaches its lights once and then sleeps on
+    // a change detector. The component has to go on at spawn instead — which
+    // is the better place for it anyway: the tier is read at the one moment
+    // the light exists to read it for.
+    let volumetric =
+        config.graphics.volumetrics == crate::render::quality::Volumetrics::FogAndLights;
 
     for (vehicle, spec, children) in &driven {
         let beam = children
@@ -254,25 +265,34 @@ fn switch_beams(
             }
             (true, None) => {
                 let half = spec.half_extents;
-                commands.entity(vehicle).with_child((
-                    HeadlightBeam,
-                    SpotLight {
-                        color: Color::srgb(1.0, 0.97, 0.90),
-                        intensity: BEAM_INTENSITY * night,
-                        range: BEAM_RANGE,
-                        inner_angle: 0.22,
-                        outer_angle: 0.62,
-                        // Shadowed spot lights on every car in a chase is the
-                        // one thing here that would actually cost frames.
-                        shadow_maps_enabled: false,
-                        ..default()
-                    },
-                    // Spot lights fire along -Z, which is also the car's
-                    // forward; the pitch is the dip that keeps the beam on the
-                    // road instead of in oncoming windscreens.
-                    Transform::from_xyz(0.0, half.y * 0.1, -half.z)
-                        .with_rotation(Quat::from_rotation_x(-0.16)),
-                ));
+                commands.entity(vehicle).with_children(|car| {
+                    let mut light = car.spawn((
+                        HeadlightBeam,
+                        SpotLight {
+                            color: Color::srgb(1.0, 0.97, 0.90),
+                            intensity: BEAM_INTENSITY * night,
+                            range: BEAM_RANGE,
+                            inner_angle: 0.22,
+                            outer_angle: 0.62,
+                            // Shadowed spot lights on every car in a chase is
+                            // the one thing here that would actually cost
+                            // frames.
+                            shadow_maps_enabled: false,
+                            ..default()
+                        },
+                        // Spot lights fire along -Z, which is also the car's
+                        // forward; the pitch is the dip that keeps the beam on
+                        // the road instead of in oncoming windscreens.
+                        Transform::from_xyz(0.0, half.y * 0.1, -half.z)
+                            .with_rotation(Quat::from_rotation_x(-0.16)),
+                    ));
+                    if volumetric {
+                        // What turns a lit patch of road into a pair of cones
+                        // coming at you through the drizzle. It has to go on
+                        // the spot light itself, not alongside it.
+                        light.insert(bevy::light::VolumetricLight);
+                    }
+                });
             }
             (false, Some(beam)) => commands.entity(beam).despawn(),
             (false, None) => {}

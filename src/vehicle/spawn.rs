@@ -40,11 +40,19 @@ pub struct AlwaysSimulated;
 #[derive(Component)]
 pub struct WheelVisual(pub usize);
 
-/// The three lofts for one archetype, as loaded meshes.
+/// One archetype's bodywork, as loaded meshes.
 struct BodyHandles {
     shell: Handle<Mesh>,
     lower: Handle<Mesh>,
+    /// The glazing. `None` on a van, which has none of its own.
     cabin: Option<Handle<Mesh>>,
+    /// The pressings over the glazing: roof, headers, pillars.
+    frame: Option<Handle<Mesh>>,
+    /// Glazing lying on the shell, which is how a van gets a windscreen.
+    windows: Option<Handle<Mesh>>,
+    /// The cabin seen from within, which is what stops the glazing being a
+    /// window onto the street on the far side of the car.
+    liner: Option<Handle<Mesh>>,
 }
 
 #[derive(Resource)]
@@ -57,6 +65,13 @@ pub struct VehicleAssets {
     tyre: Handle<StandardMaterial>,
     rim: Handle<StandardMaterial>,
     glass: Handle<StandardMaterial>,
+    /// A van's glazing, which cannot be seen through because there is nothing
+    /// behind it but the outside of the box it is lying on.
+    dark_glass: Handle<StandardMaterial>,
+    /// Shared by every car: the flake is a property of automotive paint, not
+    /// of one car's paint, and the colour that varies is in the material.
+    flake: Handle<Image>,
+    trim: super::trim::TrimKit,
 }
 
 impl VehicleAssets {
@@ -90,6 +105,9 @@ pub fn build_assets(
                     shell: add(built.shell),
                     lower: add(built.lower),
                     cabin: built.cabin.map(&mut add),
+                    frame: built.frame.map(&mut add),
+                    windows: built.windows.map(&mut add),
+                    liner: built.liner.map(&mut add),
                 },
             )
         })
@@ -119,12 +137,47 @@ pub fn build_assets(
             metallic: 1.0,
             ..default()
         }),
-        glass: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.14, 0.17, 0.22),
-            perceptual_roughness: 0.25,
-            metallic: 0.4,
-            ..default()
+        glass: materials.add(glazing(0.70)),
+        // Opaque, and the alpha is the only difference: a van's windscreen is
+        // lying on the front of the box rather than set into a hole in it, so
+        // what is behind it is not a cab but the outside of the bodywork.
+        dark_glass: materials.add(StandardMaterial {
+            alpha_mode: AlphaMode::Opaque,
+            // Duller than a car's, and the reason is the same as the opacity:
+            // at a windscreen's own roughness an opaque pane lying on a van's
+            // raked nose is a mirror pointed at the sky, and comes back as a
+            // bright panel indistinguishable from the bodywork around it.
+            perceptual_roughness: 0.24,
+            ..glazing(1.0)
         }),
+        flake: images.add(super::paint::flake()),
+        trim: super::trim::build_kit(meshes, materials, images),
+    }
+}
+
+/// Automotive glass.
+///
+/// Not metal, which is what it used to be here. Glass is a dielectric: at
+/// normal incidence four percent of the light bounces and the rest goes
+/// through, and at a grazing angle almost all of it bounces. That is what makes
+/// a windscreen show the cabin from in front and the sky from the side, and it
+/// is exactly what `metallic` destroys — a metal *tints* its reflection with
+/// its base colour instead of letting anything past it, so a dark blue metal
+/// greenhouse is a dark blue mirror at every angle and a lump at all of them.
+fn glazing(alpha: f32) -> StandardMaterial {
+    StandardMaterial {
+        base_color: Color::srgba(0.038, 0.044, 0.052, alpha),
+        // Blended rather than transmissive on purpose. Refraction through a
+        // five-millimetre pane at a windscreen's rake displaces the ray behind
+        // it by under two millimetres, which is well under a pixel at any
+        // distance a car is ever seen from here; what actually reads as glass
+        // is the Fresnel and the cabin behind it, and both of those are cheaper
+        // this way than in a transmissive pass with its own copy of the screen.
+        alpha_mode: AlphaMode::Blend,
+        perceptual_roughness: 0.055,
+        metallic: 0.0,
+        reflectance: 0.5,
+        ..default()
     }
 }
 
@@ -139,22 +192,31 @@ pub fn spawn_vehicle(
     // Car paint is a coloured base under a clear lacquer, and modelling it that
     // way rather than as "shiny metal" is what makes the highlight sit *on* the
     // panel instead of tinting itself the colour of the car.
+    let finish = super::paint::finish(spec.body_color, spec.body_metallic, 0.0);
     let paint = materials.add(StandardMaterial {
-        base_color: spec.body_color,
-        // Flake in the basecoat, then lacquer over the top. Metallic paint is
-        // rougher underneath than solid paint and reads duller for it, which is
-        // why the roughness moves with the flake rather than staying put.
-        perceptual_roughness: 0.30 + spec.body_metallic * 0.22,
-        metallic: spec.body_metallic,
-        clearcoat: 1.0,
+        base_color: finish.base_color,
+        perceptual_roughness: finish.perceptual_roughness,
+        metallic: finish.metallic,
+        clearcoat: finish.clearcoat,
         clearcoat_perceptual_roughness: 0.08,
+        // The facets. See `paint::flake` for why this is a normal map and not
+        // the anisotropy the plan asked for.
+        normal_map_texture: Some(assets.flake.clone()),
+        // The loft's UVs run nought to one over the whole car, so the tile has
+        // to be brought down to the size of a hand before it is flake rather
+        // than dents.
+        uv_transform: bevy::math::Affine2::from_scale(super::paint::FLAKE_TILING),
         ..default()
     });
 
     let anchors = spec.wheel_anchors();
     let wheel_radius = spec.wheel_radius;
     let name = spec.display_name;
-    let body = assets.body(spec.class);
+    let class = spec.class;
+    let body = assets.body(class);
+    // The fittings are placed from the spec, and the spec is moved onto the
+    // vehicle before the children are spawned.
+    let fitted = spec.clone();
 
     let mut entity = commands.spawn((
         Name::new(name),
@@ -200,6 +262,45 @@ pub fn spawn_vehicle(
                 Transform::IDENTITY,
             ));
         }
+        // The inside: the same loft, built a shade smaller and wound inside
+        // out. Without it the near glass is transparent, the far glass is
+        // culled, and you see the street straight through the car.
+        if let Some(liner) = &body.liner {
+            parent.spawn((
+                Mesh3d(liner.clone()),
+                MeshMaterial3d(assets.trim.liner.clone()),
+                Transform::IDENTITY,
+                // The greenhouse's shadow is cast by its glass — tinted glass
+                // does cast one, and the glass is the outer surface. A shadow
+                // map filled from an inside-out liner would record the far wall
+                // of the cabin and let the sun in through the roof.
+                bevy::light::NotShadowCaster,
+            ));
+            super::trim::furnish(parent, &assets.trim, class, &fitted);
+        }
+        if let Some(frame) = &body.frame {
+            parent.spawn((
+                super::damage::BodyPanel,
+                Mesh3d(frame.clone()),
+                MeshMaterial3d(paint.clone()),
+                Transform::IDENTITY,
+            ));
+        }
+        if let Some(windows) = &body.windows {
+            parent.spawn((
+                Mesh3d(windows.clone()),
+                MeshMaterial3d(assets.dark_glass.clone()),
+                Transform::IDENTITY,
+            ));
+        }
+        super::trim::fit(
+            parent,
+            &assets.trim,
+            class,
+            &fitted,
+            &paint,
+            transform.translation,
+        );
 
         for (index, anchor) in anchors.iter().enumerate().take(WHEEL_COUNT) {
             // Wheels are built about the X axis at unit radius, so the whole
