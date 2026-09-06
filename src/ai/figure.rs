@@ -141,6 +141,24 @@ const _: () = {
         body::FEET + body::SHOE_HEIGHT * 0.5 >= -CAPSULE_HALF,
         "the shoes sink through the capsule"
     );
+    // A hairline below the chin is a balaclava and one above the crown is a
+    // beret. Neither fails, and neither is something anybody would report as a
+    // bug — they would just say the pedestrians look odd.
+    assert!(
+        body::HEAD_CENTRE + body::HAIR_RISE - body::HAIR_RADIUS * body::HAIR_FLATTEN
+            > body::HEAD_CENTRE - body::HEAD_RADIUS,
+        "the hair has swallowed the face"
+    );
+    assert!(
+        body::HEAD_CENTRE + body::HAIR_RISE - body::HAIR_RADIUS * body::HAIR_FLATTEN
+            < body::HEAD_CENTRE + body::HEAD_RADIUS,
+        "the hair is floating above the head"
+    );
+    // And wide enough to wrap it, or it sits on top like a lid.
+    assert!(
+        body::HAIR_RADIUS > body::HEAD_RADIUS,
+        "the hair is narrower than the head it is on"
+    );
 };
 
 pub fn build_assets(
@@ -240,8 +258,12 @@ pub fn dress(
             MeshMaterial3d(skin.clone()),
             Transform::from_xyz(0.0, body::HEAD_CENTRE, 0.0),
         ));
-        // Sat a little high and a little back, so it reads as hair rather than
-        // as a helmet: the forehead stays bare and the crown does not.
+        // A shade wider than the head and sat a little high and a little back,
+        // so the crown is covered and the face below it is not. The hairline
+        // this puts on a figure is low — the cap cannot rise much further and
+        // still fit inside the collider — but at the distance a pedestrian is
+        // seen it is the dark top to the silhouette that does the work, not
+        // where exactly it starts.
         parent.spawn((
             Torso,
             Mesh3d(assets.hair.clone()),

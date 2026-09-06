@@ -222,6 +222,17 @@ capsule swings it about its middle, and a leg that does that is not walking.
 The stride is paced by distance covered rather than by time, so running takes
 faster steps instead of longer ones. The player wears the same figure.
 
+Skin is not cloth. It was, at roughness 0.88, which is as matte as a wool coat
+and takes no highlight at all — most of why a figure read as a mannequin. It
+has its own material now, closer to a half-gloss, plus a hair cap, hands on the
+ends of the sleeves and shoes on the ends of the legs. All four are silhouette
+work: at the distance a pedestrian is actually seen, a head that ends in a
+shape rather than fading into the background and a sleeve that ends in
+something are worth more than anything happening on the surfaces. Every
+proportion is checked at compile time against the collider capsule, because a
+figure that pokes out of its own collider is one that can be shot through the
+head without being hit.
+
 ## Roofs
 
 A building was two boxes: a wall and a capping slab. From the pavement that is
@@ -770,6 +781,12 @@ pursuit, and everything but the player's own car is positioned in the world.
   axis is scaled by the footprint's *other* side. A building twice as deep as it
   is wide has reveals twice as deep on its short faces. Lots are subdivided by
   always splitting the longer side, so the error stays under a factor of two.
+
+- A figure's hairline is low. The cap is a flattened sphere over the head and
+  it cannot rise much further without leaving the collider capsule, so it
+  covers more of the forehead than hair generally does. What it buys is the
+  dark top to the silhouette, which is the part that reads at the distance a
+  pedestrian is seen from; where exactly the hairline sits does not.
 
 - Trees lean, they do not flutter. A rigid rotation about the foot is honest for
   a swaying trunk and says nothing at all about leaves, and above a gale the
