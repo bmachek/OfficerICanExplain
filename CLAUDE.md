@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cargo run                      # debug; ~2-10s incremental after the first build
 cargo run --release            # smoother frame rate, slower to compile
 cargo run --features dev       # bevy dynamic_linking — fastest iteration
-cargo test                     # ~266 unit tests, all inline #[cfg(test)] modules
+cargo test                     # ~324 unit tests, all inline #[cfg(test)] modules
 cargo test citygen             # one module's tests (filter by name substring)
 cargo clippy --all-targets -- -D warnings
 cargo fmt
@@ -65,16 +65,21 @@ bevy_egui, saves are RON.
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, damage, lights, parked-car spawning |
-| `ai` | Traffic, pedestrians, shared steering, walk cycles |
+| `mood` | How a flummi feels (`feeling`), the painted face it wears (`face`), what it says (`voice`), taunting and cheering (`provoke`), and retaliation (`grudge`) |
+| `ai` | Traffic, pedestrians, shared steering, walk cycles, the figure itself |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, volumetrics, post stack |
 | `ui` | HUD, minimap, egui dev tuning panel, the `Escape` pause menu |
-| `audio` | Startup waveform synthesis, the sound bank, triggers |
+| `audio` | Startup waveform synthesis, source-filter voices (`voice`), the sound bank, triggers, the WAV audition tool |
 | `save` | RON quick save / load |
 
-The README's Layout table is ahead of the tree: it lists `crime`, `combat` and
-`mission` modules, and controls for firing and a crosshair, none of which exist
-in `src/` today (the crosshair and police vehicles were removed in a26c996).
-Treat `src/` as the truth and README prose as design intent.
+### What this game is
+
+It was an open-world crime sandbox and it is now a comedy one. Everything is
+made of rubber and bounces; there are no weapons, no police, no health and no
+fail state. The verb is provocation — a raspberry and a whistle — and the
+readout is a mood that every citizen carries, wears as a face, says out loud
+and catches off the neighbours. When a change has to break a tie, break it
+towards the joke.
 
 ### Determinism is the load-bearing constraint
 
@@ -88,6 +93,11 @@ street downstream. Subsystems that sample noise rather than draw use `key_for`.
 
 Because the world derives from the seed, `save::SaveGame` stores only what does
 not: seed, player position, hour. Bump `SAVE_VERSION` on any incompatible change.
+The mood is deliberately not in there — see the README's limitations.
+
+Temperaments and voices draw from `stream::MOOD`, not `stream::PEDESTRIANS`.
+Sharing would mean that retuning a fuse also moves where the next citizen spawns
+and which street they walk down.
 
 ### Schedule
 
@@ -106,9 +116,32 @@ startup currently skips straight into the game.
 ### Layout vs. entities
 
 `world::citygen` builds the whole layout (blocks, streets, road graph) once and
-keeps it resident — traffic, pursuit and the minimap query parts of the city the
-player cannot see. Only meshes and colliders stream, per 250 m chunk, in
-`world::streaming`.
+keeps it resident — traffic and the minimap query parts of the city the player
+cannot see. Only meshes and colliders stream, per 250 m chunk, in
+`world::streaming`. Anything spawned by streaming must keep its `ChunkOf`, or it
+leaks.
+
+### The traps
+
+Four things here have bitten more than once and none of them fail loudly:
+
+- **Restitution is a property of a contact.** A body held off the ground by a
+  spring — a floating character controller, a car on raycast suspension — never
+  forms one, so declaring it elastic does nothing. `bounce::controller` applies
+  the hop by hand for that reason.
+- **Avian scales a collider by its transform.** Squash and stretch is applied to
+  a figure's *children*, off their `Rest` pose; scaling the body entity would
+  flatten the collider and sink the figure through the pavement. A child with no
+  `Rest` is skipped by `figure::animate`, so a new part needs one or it will not
+  follow the squash.
+- **Two queries in one system may not both touch a component if either is
+  mutable.** Bevy panics at first run, not at compile time, and no unit test
+  builds the whole app — so the capture harness is the integration test for the
+  schedule. It has caught this twice. Split the system or use a `ParamSet`; do
+  not make the queries disjoint with a filter that quietly changes behaviour.
+- **`figure::FigureAssets` is inserted by `pedestrian::setup` and read by the
+  player spawn**, and `mood::face::FaceAssets` by both. The ordering is
+  Startup → PostStartup and is silently load-bearing.
 
 ### Rendering is preset-driven
 
@@ -155,4 +188,9 @@ declaration order.
   names (`the_root_is_the_source_trees_assets_directory`). Pure logic — layout,
   preset tables, road-graph queries — is tested; rendering is verified by capture.
 - Feel constants belong in `core::config::GameConfig` so the dev panel can tune
-  them at runtime, not as literals at the use site.
+  them at runtime, not as literals at the use site. The five temperaments are a
+  `Tempers` resource for the same reason.
+- Sound bank entries must end with `fade_edges` and `normalize`: the bank's
+  tests require every one-shot to start at exactly zero and every sound to peak
+  inside `0.3..=1.0`. Add new sounds to `every_one_shot`/`every_loop`, which is
+  what both those tests and the audition tool enumerate.
