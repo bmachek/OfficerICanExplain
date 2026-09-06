@@ -1,5 +1,7 @@
 # Boing! — Die Stadt der Flummis
 
+[![CI](https://github.com/bmachek/OfficerICanExplain/actions/workflows/ci.yml/badge.svg)](https://github.com/bmachek/OfficerICanExplain/actions/workflows/ci.yml)
+
 An open-world sandbox about being rude to strangers, built in Rust with Bevy.
 
 Everything here is made of rubber. You do not walk, you bounce; so does
