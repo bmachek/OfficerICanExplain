@@ -29,10 +29,12 @@ pub enum Action {
     Sprint,
     /// Enter/exit vehicle, pick things up.
     Interact,
-    /// Blow a raspberry at everybody nearby.
+    /// Be rude at everybody nearby: a raspberry, a fart, a cough, a spit.
     Taunt,
     /// Whistle at them instead.
     Cheer,
+    /// Say sorry and throw a flower to whoever holds it against you.
+    Apologize,
     Handbrake,
     Pause,
     /// Opens the full-screen map.
@@ -55,6 +57,7 @@ impl Action {
         map.insert(Self::Interact, KeyCode::KeyF);
         map.insert(Self::Taunt, MouseButton::Left);
         map.insert(Self::Cheer, MouseButton::Right);
+        map.insert(Self::Apologize, MouseButton::Middle);
         map.insert(Self::Handbrake, KeyCode::Space);
         map.insert(Self::Pause, KeyCode::Escape);
         map.insert(Self::Map, KeyCode::KeyM);
@@ -70,6 +73,7 @@ impl Action {
         map.insert(Self::Interact, GamepadButton::North);
         map.insert(Self::Taunt, GamepadButton::RightTrigger2);
         map.insert(Self::Cheer, GamepadButton::LeftTrigger2);
+        map.insert(Self::Apologize, GamepadButton::West);
         map.insert(Self::Handbrake, GamepadButton::East);
         map.insert(Self::Pause, GamepadButton::Start);
         map.insert(Self::Map, GamepadButton::Select);

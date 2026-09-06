@@ -909,47 +909,6 @@ pub fn inside_out(mut mesh: Mesh) -> Mesh {
     mesh
 }
 
-/// Pushes a dent into a body panel.
-///
-/// `from` is the direction the blow arrived along, in body space. The dent is
-/// centred on whichever part of the panel sits furthest into that direction —
-/// which is the part that hit something — and falls off in a raised cosine, so
-/// the crease has no rim and no hard edge.
-///
-/// Nothing is clamped against the collider: a dent only ever moves metal
-/// inwards, and the box the car collides as never changes. A wrecked car
-/// therefore still collides like a straight one, which is the right trade at
-/// this fidelity — the alternative is rebuilding a convex hull per impact.
-pub fn dent(mesh: &mut Mesh, from: Vec3, depth: f32, radius: f32) {
-    let Some(VertexAttributeValues::Float32x3(positions)) =
-        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
-    else {
-        return;
-    };
-
-    let Some(center) = positions
-        .iter()
-        .map(|p| Vec3::from(*p))
-        .max_by(|a, b| a.dot(from).total_cmp(&b.dot(from)))
-    else {
-        return;
-    };
-
-    for point in positions.iter_mut() {
-        let at = Vec3::from(*point);
-        let distance = at.distance(center);
-        if distance >= radius {
-            continue;
-        }
-        let falloff = 0.5 + 0.5 * (std::f32::consts::PI * distance / radius).cos();
-        *point = (at - from * depth * falloff).to_array();
-    }
-
-    // The panel's shading has to follow the metal, or a deep dent stays
-    // invisible until it breaks the silhouette.
-    mesh.compute_smooth_normals();
-}
-
 pub struct BodyMeshes {
     pub shell: Mesh,
     pub lower: Mesh,
@@ -1146,62 +1105,6 @@ mod tests {
                     .iter()
                     .any(|p| Vec3::from(*p).distance(Vec3::from(point)) < 1e-5),
                 "splitting invented a vertex at {point:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_dent_pushes_metal_inwards_and_leaves_the_far_side_alone() {
-        let spec = VehicleClass::Sedan.spec();
-        let before = build(VehicleClass::Sedan, &spec).shell;
-        let mut after = build(VehicleClass::Sedan, &spec).shell;
-
-        // Hit square on the nose.
-        dent(&mut after, Vec3::NEG_Z, 0.25, 1.0);
-
-        let read = |mesh: &Mesh| {
-            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-                .and_then(|a| a.as_float3())
-                .expect("positions")
-                .to_vec()
-        };
-        let (old, new) = (read(&before), read(&after));
-
-        let nose_moved = old
-            .iter()
-            .zip(&new)
-            .filter(|(o, _)| o[2] < -spec.half_extents.z * 0.85)
-            .any(|(o, n)| (o[2] - n[2]).abs() > 0.05);
-        assert!(nose_moved, "the nose should have caved in");
-
-        let tail_still = old
-            .iter()
-            .zip(&new)
-            .filter(|(o, _)| o[2] > spec.half_extents.z * 0.5)
-            .all(|(o, n)| (o[2] - n[2]).abs() < 1e-4);
-        assert!(tail_still, "a hit on the nose must not move the boot");
-    }
-
-    #[test]
-    fn a_dent_never_pushes_metal_outwards() {
-        let spec = VehicleClass::Sedan.spec();
-        let before = build(VehicleClass::Sedan, &spec).shell;
-        let mut after = build(VehicleClass::Sedan, &spec).shell;
-        let from = Vec3::new(1.0, 0.0, 0.0);
-        dent(&mut after, from, 0.3, 1.2);
-
-        let read = |mesh: &Mesh| {
-            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-                .and_then(|a| a.as_float3())
-                .expect("positions")
-                .to_vec()
-        };
-        for (o, n) in read(&before).iter().zip(read(&after)) {
-            // Displacement is along -from, so it can only ever reduce the
-            // vertex's extent in that direction.
-            assert!(
-                Vec3::from(n).dot(from) <= Vec3::from(*o).dot(from) + 1e-4,
-                "a dent must not push a panel out"
             );
         }
     }

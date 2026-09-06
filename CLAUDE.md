@@ -12,7 +12,8 @@ cargo test                     # ~324 unit tests, all inline #[cfg(test)] module
 cargo test citygen             # one module's tests (filter by name substring)
 cargo clippy --all-targets -- -D warnings
 cargo fmt
-tools/fetch-materials.sh       # ~200 MB of CC0 PBR sets into assets/materials/ (optional)
+tools/fetch-materials.sh       # optional CC0 assets: PBR sets into assets/materials/, recorded sounds into assets/sounds/
+tools/fetch-materials.bat      # the same for Windows — KEEP THE TWO IN SYNC (see below)
 cargo run -- --audition shots/audio   # write the whole sound bank out as WAVs
 ```
 
@@ -50,7 +51,10 @@ a WAV and exits without starting Bevy at all, so a curse can be listened to
 without finding a flummi cross enough to say one. `audio::bank::every_one_shot`
 and `every_loop` are what it enumerates — and what the bank's own tests iterate,
 so a sound that is not in one of those lists is exempt from the rules the rest
-of the bank is held to.
+of the bank is held to. Both enumerate the *synthesised* versions: recordings
+fetched into `assets/sounds/` (see `audio::files`) are auditioned by playing
+the files directly, and are held to the bank's rules mechanically at load
+(mono mix, resample, fade, normalise, seam-wrap) rather than by test.
 
 ## Architecture
 
@@ -61,10 +65,10 @@ bevy_egui, saves are RON.
 | Module | What lives there |
 |---|---|
 | `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
-| `world` | City generator, road graph, chunk streaming, day/night, weather, facades/LOD shells, window interiors, road wear, vegetation, props, procedural + scanned textures |
+| `world` | City generator, road graph, chunk streaming, day/night, weather, facades/LOD shells, window interiors, road wear, vegetation, props, world damage (`mayhem`), procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
-| `vehicle` | Arcade vehicle physics, specs, bodywork, damage, lights, parked-car spawning |
+| `vehicle` | Arcade vehicle physics, specs, bodywork, comedy crash response (`impact`), lights, parked-car spawning |
 | `mood` | How a flummi feels (`feeling`), the painted face it wears (`face`), what it says (`voice`), taunting and cheering (`provoke`), and retaliation (`grudge`) |
 | `ai` | Traffic, pedestrians, shared steering, walk cycles, the figure itself |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, volumetrics, post stack |
@@ -157,13 +161,21 @@ are pure functions so they can be unit-tested without a GPU.
 
 No third-party art ships. Every texture is painted per-pixel at startup
 (`world::texture`) and every sound is synthesised into a buffer
-(`audio::synth`). Scanned CC0 PBR sets are an *optional* upgrade:
-`world::material` returns `Option` for every lookup and callers fall back to the
-procedural version, so a fresh clone with no `assets/materials/` runs identically
-and just looks worse. Adding a scanned set means adding its name to both
-`world::material::set` and `tools/fetch-materials.sh`. Bevy has no runtime mip
-generator, so both modules build mip chains on the CPU (averaged in linear space
-for sRGB images).
+(`audio::synth`). CC0 downloads are an *optional* upgrade on both fronts:
+`world::material` returns `Option` for every material lookup, and
+`audio::files` returns `Option` for every sound in `assets/sounds/` — callers
+fall back to the procedural/synthesised version, so a fresh clone with neither
+directory runs identically and just looks and sounds worse. Adding a scanned
+material set means adding its name to both `world::material::set` and the
+fetch scripts; adding a recorded sound means an entry in the fetch scripts
+under the sound's bank name. Bevy has no runtime mip generator, so the texture
+modules build mip chains on the CPU (averaged in linear space for sRGB
+images).
+
+`tools/fetch-materials.sh` and `tools/fetch-materials.bat` are twins and MUST
+be kept in sync: any material, sound, or behaviour change in one gets mirrored
+in the other in the same commit. The lists are the contract; only the shell
+plumbing may differ.
 
 The asset root is resolved explicitly in `core::assets::root()` and handed to
 `AssetPlugin`, because Bevy's default resolves against the executable and

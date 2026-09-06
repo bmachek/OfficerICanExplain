@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# Fetches the scanned PBR materials the city is textured with.
+# Fetches the optional scanned/recorded assets: PBR materials and sounds.
 #
-# Everything here is from ambientCG (https://ambientcg.com) and is released
-# under CC0 1.0 — public domain, no attribution required, no restrictions on
-# use. That licence is the reason these specific sets were chosen: the game
-# ships them without owing anybody anything.
+# Everything here is CC0 1.0 — public domain, no attribution required, no
+# restrictions on use. That licence is the reason these specific sets were
+# chosen: the game ships them without owing anybody anything. Materials come
+# from ambientCG (https://ambientcg.com), sounds from OpenGameArt
+# (https://opengameart.org).
 #
-# The download is ~215 MB and lands in assets/materials/, which is gitignored.
-# The game runs without it: `world::texture` generates a procedural stand-in for
-# every material it cannot find on disk, so a fresh clone still starts.
+# The download lands in assets/materials/ and assets/sounds/, both gitignored.
+# The game runs without either: `world::texture` generates a procedural
+# stand-in for every material it cannot find on disk, and `audio::bank`
+# synthesises every sound `audio::files` cannot find, so a fresh clone still
+# starts.
+#
+# KEEP IN SYNC with tools/fetch-materials.bat — the Windows twin of this
+# script. Any material or sound added here must be added there too.
 #
 #   tools/fetch-materials.sh          # fetch anything missing
 #   tools/fetch-materials.sh --force  # re-fetch everything
@@ -65,5 +71,67 @@ for material in "${MATERIALS[@]}"; do
     find "$target" -type f ! -name '*.jpg' -delete
 done
 
+# ------------------------------------------------------------------ sounds ----
+#
+# One entry per sound bank name (see `audio::bank`): "<name>|<url>". The file
+# keeps its source extension; `audio::files` tries wav/flac/ogg/mp3 in turn.
+# Sounds with no good CC0 recording (screech, the flummi voices) simply have
+# no entry here and stay synthesised — the fallback is per sound.
+SOUNDS_DEST="assets/sounds"
+SOUNDS=(
+    "boing|https://opengameart.org/sites/default/files/boing.flac"
+    "crash|https://opengameart.org/sites/default/files/qubodup-crash.ogg"
+    # A bicycle horn on a car is the joke; a car horn is only a car.
+    "honk|https://opengameart.org/sites/default/files/bicycle-horn-1.wav"
+    "explosion|https://opengameart.org/sites/default/files/Chunky%20Explosion.mp3"
+    "birdsong|https://opengameart.org/sites/default/files/park_ambience_birds.wav"
+    "spray|https://opengameart.org/sites/default/files/park_ambience_river.wav"
+    "uproar|https://opengameart.org/sites/default/files/crowd_shouting_0.ogg"
+)
+# These two live inside one zip (qubodup's CC0 car pack): "<name>|<member>".
+CAR_PACK_URL="https://opengameart.org/sites/default/files/car_sound_effects_pack.zip"
+CAR_PACK=(
+    "engine|Car_Engine_Loop.ogg"
+    "car-door|Car_Door_Close.ogg"
+)
+
+mkdir -p "$SOUNDS_DEST"
+for entry in "${SOUNDS[@]}"; do
+    name="${entry%%|*}"
+    url="${entry#*|}"
+    ext="${url##*.}"
+    target="$SOUNDS_DEST/$name.$ext"
+    if [[ -f "$target" && "$force" == false ]]; then
+        echo "have    $name"
+        continue
+    fi
+    echo "fetch   $name"
+    if ! curl -fsSL --retry 3 --retry-delay 2 -o "$target" "$url"; then
+        echo "        failed; skipping (the game synthesises it instead)" >&2
+        rm -f "$target"
+    fi
+done
+
+need_pack=false
+for entry in "${CAR_PACK[@]}"; do
+    name="${entry%%|*}"
+    member="${entry#*|}"
+    [[ -f "$SOUNDS_DEST/$name.${member##*.}" && "$force" == false ]] || need_pack=true
+done
+if [[ "$need_pack" == true ]]; then
+    echo "fetch   car sound pack"
+    pack="$(mktemp -t carpack.XXXXXX).zip"
+    if curl -fsSL --retry 3 --retry-delay 2 -o "$pack" "$CAR_PACK_URL"; then
+        for entry in "${CAR_PACK[@]}"; do
+            name="${entry%%|*}"
+            member="${entry#*|}"
+            unzip -qop "$pack" "$member" > "$SOUNDS_DEST/$name.${member##*.}"
+        done
+    else
+        echo "        failed; skipping (the game synthesises them instead)" >&2
+    fi
+    rm -f "$pack"
+fi
+
 echo
-du -sh "$DEST"
+du -sh "$DEST" "$SOUNDS_DEST"

@@ -7,6 +7,7 @@
 
 pub mod audition;
 pub mod bank;
+pub mod files;
 pub mod sfx;
 pub mod synth;
 pub mod voice;

@@ -284,7 +284,13 @@ fn announce(
 ) {
     if let Some(bank) = bank {
         let sound = match kind {
-            Rudeness::Taunt => bank.raspberry.clone(),
+            // The rudeness rotation. Random rather than cycling, because a
+            // predictable sequence reads as a jukebox and an unpredictable
+            // one reads as a person deciding how rude to be today.
+            Rudeness::Taunt => {
+                let rude = [&bank.raspberry, &bank.fart, &bank.cough, &bank.spit];
+                rude[rng.random_range(0..rude.len())].clone()
+            }
             Rudeness::Cheer => bank.whistle[rng.random_range(0..VARIANTS)].clone(),
         };
         commands.spawn((

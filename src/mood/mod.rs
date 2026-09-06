@@ -5,6 +5,7 @@
 //! that shows the answer. Nothing here is decoration — the face *is* the
 //! readout, and it is the only one the game has.
 
+pub mod apology;
 pub mod face;
 pub mod feeling;
 pub mod grudge;
@@ -30,6 +31,7 @@ impl Plugin for MoodPlugin {
             feeling::FeelingPlugin,
             provoke::ProvokePlugin,
             grudge::GrudgePlugin,
+            apology::ApologyPlugin,
         ))
         .add_systems(Startup, build_faces)
         .add_systems(

@@ -51,8 +51,9 @@ FRAMINGS=(
     # tall and every one of them is on the horizon.
     "wear|--at -163.6,12,-744.3 --look -138.9,0,-740.8 --hour 11"
     "cars|--at-car --hour 11"
-    "damage|--at-car --damage 0.45 --hour 11"
     "showroom|--showroom --hour 11"
+    # The hydrant geyser. Long enough for the column to fill with droplets.
+    "geyser|--geyser --frames 240 --hour 15"
     "driving|--follow --drive --frames 2000 --hour 15"
     "map|--follow --map"
     # The faces, held at three points on the scale by `--mood`. Nothing else

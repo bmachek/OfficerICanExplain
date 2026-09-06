@@ -19,7 +19,6 @@ use crate::player::interact::Driving;
 use crate::player::on_foot::Player;
 use crate::render::quality::{AoQuality, Capabilities, QualityPreset};
 use crate::vehicle::controller::VehicleState;
-use crate::vehicle::damage::VehicleHealth;
 use crate::vehicle::spec::VehicleSpec;
 use crate::world::weather::Weather;
 
@@ -120,7 +119,7 @@ fn tuning_panel(
             ui.separator();
             ui.label(
                 egui::RichText::new(
-                    "WASD move · Shift sprint · Space jump · LMB taunt · RMB cheer · F1 free cam",
+                    "WASD move · Shift sprint · Space jump · LMB taunt · RMB cheer · MMB sorry · F1 free cam",
                 )
                 .small()
                 .weak(),
@@ -164,6 +163,8 @@ fn mood_section(
     ui.add(egui::Slider::new(&mut m.taunt_bite, 0.0..=2.0).text("taunt bite"));
     ui.add(egui::Slider::new(&mut m.cheer_warmth, 0.0..=2.0).text("cheer warmth"));
     ui.add(egui::Slider::new(&mut m.provoke_rest, 0.05..=4.0).text("provoke rest s"));
+    ui.add(egui::Slider::new(&mut m.apology_range, 2.0..=30.0).text("apology m"));
+    ui.add(egui::Slider::new(&mut m.apology_balm, 0.0..=1.0).text("apology balm"));
     ui.add(egui::Slider::new(&mut m.grudge_seconds, 0.0..=30.0).text("grudge s"));
     ui.add(egui::Slider::new(&mut m.grudge_speed, 0.0..=12.0).text("grudge m/s"));
 
@@ -291,12 +292,12 @@ fn graphics_section(ui: &mut egui::Ui, config: &mut GameConfig, caps: &Capabilit
 fn vehicle_panel(
     mut contexts: EguiContexts,
     players: Query<&Driving, With<Player>>,
-    mut vehicles: Query<(&mut VehicleSpec, &VehicleState, &VehicleHealth)>,
+    mut vehicles: Query<(&mut VehicleSpec, &VehicleState)>,
 ) -> Result {
     let Ok(driving) = players.single() else {
         return Ok(());
     };
-    let Ok((mut spec, state, health)) = vehicles.get_mut(driving.0) else {
+    let Ok((mut spec, state)) = vehicles.get_mut(driving.0) else {
         return Ok(());
     };
     let ctx = contexts.ctx_mut()?;
@@ -311,10 +312,6 @@ fn vehicle_panel(
                 state.grounded_wheels(),
                 state.steer_angle
             ));
-            ui.add(
-                egui::ProgressBar::new(health.fraction()).text(format!("{:.0} hp", health.current)),
-            );
-
             ui.separator();
             ui.label(egui::RichText::new("grip").strong());
             ui.add(egui::Slider::new(&mut spec.front_grip, 0.4..=3.0).text("front"));

@@ -76,8 +76,10 @@ const EYE_W: f32 = 0.15;
 const EYE_H: f32 = 0.19;
 const BROW_Y: f32 = 0.60;
 const MOUTH_Y: f32 = -0.30;
-/// How far the mouth bends at either extreme of mood.
-const MOUTH_CURVE: f32 = 0.55;
+/// How far the mouth bends at either extreme of mood. Well past where a
+/// tasteful face would stop: these heads are 13 cm across and read from
+/// half a street away, and at that distance tasteful is invisible.
+const MOUTH_CURVE: f32 = 0.72;
 /// Thickness of the mouth when it is shut, so that a neutral face has a line
 /// rather than nothing.
 const LIP_LINE: f32 = 0.055;
@@ -92,6 +94,8 @@ const TOOTH: [f32; 3] = [0.97, 0.96, 0.93];
 const BLUSH: [f32; 3] = [0.86, 0.15, 0.13];
 const VEIN: [f32; 3] = [0.42, 0.02, 0.06];
 const SWEAT: [f32; 3] = [0.60, 0.82, 0.96];
+const TONGUE: [f32; 3] = [0.95, 0.44, 0.48];
+const ROSY: [f32; 3] = [0.99, 0.55, 0.38];
 
 // ------------------------------------------------------------- the paint ----
 
@@ -177,13 +181,16 @@ pub fn shade(p: Vec2, mood: f32) -> [f32; 3] {
     }
     let angry = (-mood).max(0.0);
     let happy = mood.max(0.0);
+    let joy = smoothstep01((mood - 0.40) / 0.50);
 
-    // Cheeks first, so everything else sits on top of the flush.
-    if angry > 0.0 {
-        for side in [-1.0f32, 1.0] {
-            let reach = (1.0 - p.distance(Vec2::new(side * 0.52, -0.02)) / 0.26).clamp(0.0, 1.0);
-            colour = over(colour, BLUSH, reach * reach * angry * 0.6);
-        }
+    // Cheeks first, so everything else sits on top of the flush. The same
+    // spots blush at both ends — hot with rage on the way down, rosy with
+    // delight on the way up — because a face with nothing on its cheeks is a
+    // face at rest, and neither extreme is anywhere near rest.
+    for side in [-1.0f32, 1.0] {
+        let reach = (1.0 - p.distance(Vec2::new(side * 0.52, -0.02)) / 0.26).clamp(0.0, 1.0);
+        colour = over(colour, BLUSH, reach * reach * angry * 0.6);
+        colour = over(colour, ROSY, reach * reach * joy * 0.45);
     }
 
     // The anger vein, and the sweat of somebody about to lose it entirely.
@@ -219,8 +226,13 @@ pub fn shade(p: Vec2, mood: f32) -> [f32; 3] {
     // neutral face gets a stroke rather than a gap in the geometry.
     let bend = mouth_curvature(mood);
     let width = 0.40 + 0.10 * happy - 0.02 * angry;
-    let opening = 0.03 + 0.30 * mood.abs();
-    let lip = MOUTH_Y + bend * p.x * p.x;
+    let opening = 0.035 + 0.36 * mood.abs();
+    // Mildly annoyed is its own expression: before the mouth commits to a
+    // frown it goes wavy — the worried squiggle every cartoonist reaches for —
+    // and the wave fades out again once real anger drags the corners down.
+    let fret = smoothstep01(angry / 0.30) * (1.0 - smoothstep01((angry - 0.45) / 0.30));
+    let squiggle = fret * 0.04 * (std::f32::consts::TAU * p.x / 0.22).sin();
+    let lip = MOUTH_Y + bend * p.x * p.x + squiggle;
     let taper = (1.0 - (p.x / width).powi(2)).max(0.0).sqrt();
     let half = LIP_LINE * 0.5 + opening * 0.5 * taper;
     let mouth = edge(half - (p.y - lip).abs(), SOFT) * edge(width + LIP_LINE - p.x.abs(), SOFT);
@@ -236,15 +248,28 @@ pub fn shade(p: Vec2, mood: f32) -> [f32; 3] {
         colour = over(colour, TOOTH, mouth * band * gap * bared);
     }
 
-    // Eyes: a filled ellipse that narrows to a slit as the mood sours, crossed
-    // over to a pair of `^` arcs once it is properly delighted.
-    let joy = smoothstep01((mood - 0.40) / 0.50);
+    // A properly delighted mouth has a tongue lolling in the bottom of it.
+    // Masked by the mouth's own coverage, so however the opening moves the
+    // tongue can never escape the face.
+    if joy > 0.0 && mouth > 0.0 {
+        let loll = ellipse(
+            p,
+            Vec2::new(0.09, lip - half + opening * 0.18),
+            Vec2::new(0.17, opening * 0.42),
+            SOFT,
+        );
+        colour = over(colour, TONGUE, mouth * loll * joy);
+    }
+
+    // Eyes: a filled ellipse that narrows as the mood sours — to a furious
+    // little bead, not just a slit, because rage concentrates — crossed over
+    // to a pair of `^` arcs once it is properly delighted.
     for side in [-1.0f32, 1.0] {
         let local = p - Vec2::new(side * EYE_X, EYE_Y);
         let open = ellipse(
             local,
             Vec2::ZERO,
-            Vec2::new(EYE_W, EYE_H * (1.0 - 0.74 * angry)),
+            Vec2::new(EYE_W * (1.0 - 0.45 * angry), EYE_H * (1.0 - 0.74 * angry)),
             SOFT,
         );
         let arc = stroke(local, -EYE_W, EYE_W, 0.055, |x| {
@@ -255,7 +280,10 @@ pub fn shade(p: Vec2, mood: f32) -> [f32; 3] {
 
     // Brows: the loudest feature on the face, and the one doing most of the
     // work. Anger drops the inner ends towards the nose; delight lifts the
-    // whole thing and bows it.
+    // whole thing and bows it. They thicken towards either extreme — a strong
+    // feeling gets a heavier stroke, the way a cartoonist bears down on the
+    // pen for the panel where somebody finally snaps.
+    let heft = 0.055 + 0.025 * mood.abs();
     let tilt = angry * 0.22;
     // Kept modest on the happy side: the brow sits high on a sphere already,
     // and any more lift takes it over the crown, where it is foreshortened into
@@ -267,7 +295,7 @@ pub fn shade(p: Vec2, mood: f32) -> [f32; 3] {
         let outer = side * 0.54;
         let at_nose = BROW_Y + lift - tilt;
         let at_temple = BROW_Y + lift + tilt * 0.25;
-        let brow = stroke(p, inner, outer, 0.055, |x| {
+        let brow = stroke(p, inner, outer, heft, |x| {
             let along = ((x - inner) / (outer - inner)).clamp(0.0, 1.0);
             at_nose + (at_temple - at_nose) * along + bow * (along * std::f32::consts::PI).sin()
         });

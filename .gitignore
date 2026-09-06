@@ -10,6 +10,10 @@
 # Scanned PBR materials, fetched by tools/fetch-materials.sh (~143 MB)
 /assets/materials/
 
+# Recorded CC0 sounds, fetched by the same script; the bank synthesises
+# whatever is missing
+/assets/sounds/
+
 # Working before/after comparisons for a phase. The README gallery is what
 # ships; these are scratch.
 shots/before/

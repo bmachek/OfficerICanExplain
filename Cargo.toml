@@ -1,5 +1,5 @@
 [package]
-name = "officer_i_can_explain"
+name = "mood_swings"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
@@ -33,6 +33,16 @@ bevy = { version = "0.19", features = [
     "serialize",
 ] }
 avian3d = "0.7"
+# Already in the tree through bevy_audio; declared directly for its file
+# decoders, so `audio::files` can read the fetched CC0 recordings (see
+# tools/fetch-materials.sh) in whatever container they were published in.
+# Pinned to the version bevy_audio uses so nothing is compiled twice.
+rodio = { version = "0.22", default-features = false, features = [
+    "wav",
+    "flac",
+    "vorbis",
+    "mp3",
+] }
 leafwing-input-manager = "0.21"
 bevy_egui = "0.42"
 rand = "0.10"
