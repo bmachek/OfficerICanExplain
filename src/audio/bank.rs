@@ -20,6 +20,7 @@ use super::synth::{
     LowPass, Partial, Resonator, SAMPLE_RATE, SynthSound, at, fade_edges, harmonics, hit,
     normalize, samples, white, wrap_seam,
 };
+use super::voice::{self, Onset, Syllable};
 use crate::core::rng::{stream, stream_for};
 
 /// Every sound, loaded once and shared by everything that plays it.
@@ -33,7 +34,24 @@ pub struct SoundBank {
     pub engine: Handle<SynthSound>,
     pub screech: Handle<SynthSound>,
     pub ambience: Handle<SynthSound>,
+
+    // --- voices ---
+    //
+    // Several of each where one would be recognised as a repeat. A flummi
+    // saying the same four syllables every time it is annoyed stops being a
+    // citizen and becomes a doorbell, and playback pitches these further apart
+    // again per speaker. The ones that are single are single because they are
+    // short enough that nobody hears them as a phrase.
+    pub whistle: [Handle<SynthSound>; VARIANTS],
+    pub giggle: Handle<SynthSound>,
+    pub grumble: [Handle<SynthSound>; VARIANTS],
+    pub curse: [Handle<SynthSound>; VARIANTS],
+    pub raspberry: Handle<SynthSound>,
+    pub gasp: Handle<SynthSound>,
 }
+
+/// How many takes of each spoken sound the bank holds.
+pub const VARIANTS: usize = 3;
 
 /// Firing frequency, in hertz, that the engine loop plays at unit speed.
 /// Everything driving it scales from here.
@@ -49,11 +67,52 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         engine: sounds.add(engine_loop()),
         screech: sounds.add(screech_loop()),
         ambience: sounds.add(ambience_loop()),
+
+        whistle: std::array::from_fn(|take| sounds.add(whistle(take))),
+        giggle: sounds.add(giggle()),
+        grumble: std::array::from_fn(|take| sounds.add(grumble(take))),
+        curse: std::array::from_fn(|take| sounds.add(curse(take))),
+        raspberry: sounds.add(raspberry()),
+        gasp: sounds.add(gasp()),
     }
 }
 
 fn audio_stream(seed: u64) -> ChaCha8Rng {
     stream_for(seed, stream::AUDIO)
+}
+
+/// Every one-shot in the bank, by name.
+///
+/// Built rather than listed at each use, because there are three places that
+/// want the whole bank — the two tests that hold it to its rules, and the
+/// audition tool — and a hand-kept list in each of them means a new sound is
+/// exempt from the rules until somebody notices.
+pub fn every_one_shot() -> Vec<(String, SynthSound)> {
+    let mut all = vec![
+        ("boing".to_string(), boing()),
+        ("explosion".to_string(), explosion()),
+        ("crash".to_string(), crash()),
+        ("footstep".to_string(), footstep()),
+        ("car-door".to_string(), car_door()),
+        ("giggle".to_string(), giggle()),
+        ("raspberry".to_string(), raspberry()),
+        ("gasp".to_string(), gasp()),
+    ];
+    for take in 0..VARIANTS {
+        all.push((format!("whistle-{take}"), whistle(take)));
+        all.push((format!("grumble-{take}"), grumble(take)));
+        all.push((format!("curse-{take}"), curse(take)));
+    }
+    all
+}
+
+/// And every loop.
+pub fn every_loop() -> Vec<(String, SynthSound)> {
+    vec![
+        ("engine".to_string(), engine_loop()),
+        ("screech".to_string(), screech_loop()),
+        ("ambience".to_string(), ambience_loop()),
+    ]
 }
 
 // ------------------------------------------------------------- one-shots ----
@@ -207,6 +266,127 @@ fn car_door() -> SynthSound {
     SynthSound::new(out)
 }
 
+// ---------------------------------------------------------------- voices ----
+//
+// Everything below is gibberish on purpose — see `super::voice`. What carries
+// the mood is the shape of the phrase and not the syllables in it: a giggle is
+// short syllables climbing, a grumble is long ones falling, and a curse is a
+// plosive followed by two hard hits. Written that way, the mood is a contour
+// somebody can argue with rather than a sample somebody has to re-record.
+
+/// Base pitch of a flummi's speaking voice, in hertz. Playback moves each
+/// citizen away from this again, so it is only the middle of the crowd.
+const SPEAKING_HZ: f32 = 168.0;
+
+/// A cheerful tune, whistled. Six notes wandering about a major triad, so it
+/// reads as somebody idly pleased rather than as a signal.
+fn whistle(take: usize) -> SynthSound {
+    let mut rng = audio_stream(11 + take as u64);
+    let root = voice::step(880.0, take as f32 * 2.0);
+    let tunes = [
+        [0.0, 4.0, 7.0, 4.0, 9.0, 7.0],
+        [0.0, 7.0, 5.0, 9.0, 12.0, 7.0],
+        [0.0, 2.0, 4.0, 9.0, 7.0, 12.0],
+    ];
+    let notes: Vec<f32> = tunes[take % tunes.len()]
+        .iter()
+        .map(|semitones| voice::step(root, *semitones))
+        .collect();
+
+    let mut out = voice::whistle(&mut rng, &notes, 1.15);
+    fade_edges(&mut out, 0.012);
+    normalize(&mut out, 0.55);
+    SynthSound::new(out)
+}
+
+/// Four short syllables climbing. The rise is the laugh — the same syllables
+/// falling are a sob, which is a different game entirely.
+fn giggle() -> SynthSound {
+    let mut rng = audio_stream(14);
+    let base = SPEAKING_HZ * 1.35;
+    let syllables: Vec<Syllable> = (0..4)
+        .map(|index| {
+            let hz = voice::step(base, index as f32 * 1.8);
+            Syllable::new(voice::EE, hz, 0.075)
+                .onset(Onset::Fricative)
+                .bend(1.18)
+                .gain(1.0 - index as f32 * 0.12)
+        })
+        .collect();
+
+    let mut out = voice::utter(&mut rng, &syllables);
+    fade_edges(&mut out, 0.006);
+    normalize(&mut out, 0.6);
+    SynthSound::new(out)
+}
+
+/// Muttering: low, dark vowels on a falling contour, with the top taken off it.
+///
+/// The low-pass is what makes it muttering rather than speech. A grumble is
+/// something said into a collar, and the ear reads a missing top end as
+/// somebody not meaning you to catch it.
+fn grumble(take: usize) -> SynthSound {
+    let mut rng = audio_stream(17 + take as u64);
+    let base = SPEAKING_HZ * (0.62 + take as f32 * 0.05);
+    let syllables: Vec<Syllable> = (0..3)
+        .map(|index| {
+            let hz = voice::step(base, -(index as f32) * 1.5);
+            Syllable::new(voice::dark_vowel(&mut rng), hz, 0.17 + index as f32 * 0.02).bend(0.88)
+        })
+        .collect();
+
+    let mut out = voice::utter(&mut rng, &syllables);
+    let mut collar = LowPass::new(1_400.0);
+    for sample in &mut out {
+        *sample = collar.process(*sample);
+    }
+    fade_edges(&mut out, 0.008);
+    normalize(&mut out, 0.6);
+    SynthSound::new(out)
+}
+
+/// Swearing: a plosive and two hard syllables, bitten off at the end.
+///
+/// The plosive is doing nearly all the work. Without it this is shouting; with
+/// it the ear supplies a consonant and hears a word it cannot quite make out,
+/// which is funnier and, conveniently, cannot be quoted back at anybody.
+fn curse(take: usize) -> SynthSound {
+    let mut rng = audio_stream(21 + take as u64);
+    let base = SPEAKING_HZ * (1.10 + take as f32 * 0.08);
+    let syllables = [
+        Syllable::new(voice::AH, base, 0.13)
+            .onset(Onset::Plosive)
+            .bend(0.82),
+        Syllable::new(voice::any_vowel(&mut rng), voice::step(base, -3.0), 0.10)
+            .onset(Onset::Plosive)
+            .bend(0.72)
+            .gain(0.85),
+    ];
+
+    let mut out = voice::utter(&mut rng, &syllables);
+    fade_edges(&mut out, 0.005);
+    normalize(&mut out, 0.8);
+    SynthSound::new(out)
+}
+
+/// The provocation. Nothing in the game is ruder and nothing is cheaper.
+fn raspberry() -> SynthSound {
+    let mut rng = audio_stream(25);
+    let mut out = voice::raspberry(&mut rng, 0.55, 35.0);
+    fade_edges(&mut out, 0.008);
+    normalize(&mut out, 0.85);
+    SynthSound::new(out)
+}
+
+/// Somebody seeing it coming.
+fn gasp() -> SynthSound {
+    let mut rng = audio_stream(26);
+    let mut out = voice::gasp(&mut rng, 0.30);
+    fade_edges(&mut out, 0.004);
+    normalize(&mut out, 0.5);
+    SynthSound::new(out)
+}
+
 // ----------------------------------------------------------------- loops ----
 
 /// Seconds per repeat of the engine loop. Short, because the loop is a
@@ -327,11 +507,7 @@ mod tests {
         // A discontinuity at the loop point is a click, once per repeat, for as
         // long as the sound plays. It is the single most audible thing that can
         // go wrong here, so it gets its own test.
-        for (name, sound) in [
-            ("engine", engine_loop()),
-            ("screech", screech_loop()),
-            ("ambience", ambience_loop()),
-        ] {
+        for (name, sound) in every_loop() {
             let buffer: Vec<f32> = sound.decoder().collect();
             let (inside, seam) = steps(&buffer);
             assert!(
@@ -343,13 +519,7 @@ mod tests {
 
     #[test]
     fn one_shots_start_and_end_in_silence() {
-        for (name, sound) in [
-            ("boing", boing()),
-            ("explosion", explosion()),
-            ("crash", crash()),
-            ("footstep", footstep()),
-            ("car door", car_door()),
-        ] {
+        for (name, sound) in every_one_shot() {
             let buffer: Vec<f32> = sound.decoder().collect();
             assert_eq!(buffer[0], 0.0, "{name} starts mid-waveform");
             assert!(
@@ -361,14 +531,9 @@ mod tests {
 
     #[test]
     fn nothing_in_the_bank_clips() {
-        for (name, sound) in [
-            ("boing", boing()),
-            ("explosion", explosion()),
-            ("crash", crash()),
-            ("engine", engine_loop()),
-            ("screech", screech_loop()),
-            ("ambience", ambience_loop()),
-        ] {
+        let mut all = every_one_shot();
+        all.extend(every_loop());
+        for (name, sound) in all {
             let peak = sound
                 .decoder()
                 .fold(0.0f32, |m: f32, s: f32| m.max(s.abs()));

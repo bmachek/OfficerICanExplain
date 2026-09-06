@@ -28,6 +28,7 @@ use crate::core::rng::{stream, stream_for};
 use crate::core::schedule::GameSet;
 use crate::mood::face::{FaceAssets, FaceLevel};
 use crate::mood::feeling::{Mood, MoodRng, Temperament};
+use crate::mood::voice::Voicebox;
 use crate::player::on_foot::Player;
 use crate::world::City;
 use crate::world::buildings::SIDEWALK_HEIGHT;
@@ -217,6 +218,10 @@ fn maintain_population(
         let temper = Temperament::draw(&mut tempers.0);
         let mood = temper.baseline;
         let worn = faces.wear(mood);
+        // Their own voice, for as long as they are resident. The same stream as
+        // the temperament: how somebody sounds is part of who they are, and
+        // both are drawn once and never again.
+        let pitch = tempers.0.random_range(0.82..1.28);
 
         let mut person = commands.spawn((
             Name::new("Pedestrian"),
@@ -239,6 +244,7 @@ fn maintain_population(
             temper,
             Mood::new(mood),
             FaceLevel(worn.level),
+            Voicebox::new(pitch),
             Visibility::default(),
         ));
         super::figure::dress(&mut person, &figures, material, &worn, &mut rng.0);

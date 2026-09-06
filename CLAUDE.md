@@ -13,6 +13,7 @@ cargo test citygen             # one module's tests (filter by name substring)
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 tools/fetch-materials.sh       # ~200 MB of CC0 PBR sets into assets/materials/ (optional)
+cargo run -- --audition shots/audio   # write the whole sound bank out as WAVs
 ```
 
 Optional cargo features: `raytracing` (pulls in `bevy_solari`), `dlss` (needs an
@@ -41,6 +42,15 @@ p95 and worst frame time. Full flag table is in README.md.
 Capture mode is not just a camera: `core::capture::is_capture_mode()` gates the
 dev panel off (`ui`) and mutes audio, and several systems check it. Anything that
 would spoil an unattended shot should check it too.
+
+### Verifying audio changes
+
+Same problem, same answer. `--audition <dir>` writes every sound in the bank to
+a WAV and exits without starting Bevy at all, so a curse can be listened to
+without finding a flummi cross enough to say one. `audio::bank::every_one_shot`
+and `every_loop` are what it enumerates — and what the bank's own tests iterate,
+so a sound that is not in one of those lists is exempt from the rules the rest
+of the bank is held to.
 
 ## Architecture
 

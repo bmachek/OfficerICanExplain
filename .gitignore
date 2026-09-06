@@ -14,3 +14,6 @@
 # ships; these are scratch.
 shots/before/
 shots/after/
+
+# Auditioned sound, written by `cargo run -- --audition`
+/shots/audio/

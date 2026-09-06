@@ -21,6 +21,7 @@ use crate::bounce::controller::{Bouncer, JUMP_SCALE};
 use crate::core::schedule::GameSet;
 use crate::mood::face::FaceLevel;
 use crate::mood::feeling::{Mood, Temperament};
+use crate::mood::voice::Voicebox;
 use crate::player::camera::CameraRig;
 use crate::player::input::Action;
 use crate::world::City;
@@ -88,6 +89,9 @@ fn spawn_player(
         temper,
         Mood::new(temper.baseline),
         FaceLevel(worn.level),
+        // Dead centre of the crowd's range: the player's voice is the one the
+        // others are heard against.
+        Voicebox::new(1.0),
         // The player carries the input map; everything else reads ActionState.
         Action::default_input_map(),
     ));

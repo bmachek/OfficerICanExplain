@@ -7,6 +7,7 @@
 
 pub mod face;
 pub mod feeling;
+pub mod voice;
 
 use bevy::prelude::*;
 
@@ -16,6 +17,13 @@ pub struct MoodPlugin;
 
 impl Plugin for MoodPlugin {
     fn build(&self, app: &mut App) {
+        // A screenshot is taken by a process nobody is listening to, and the
+        // capture run is scripted; the rest of the audio wiring bows out the
+        // same way in `crate::audio`.
+        if !crate::core::capture::is_capture_mode() {
+            app.add_plugins(voice::VoicePlugin);
+        }
+
         app.add_plugins(feeling::FeelingPlugin)
             .add_systems(Startup, build_faces)
             .add_systems(
