@@ -59,10 +59,17 @@ pub struct Breakaway {
 }
 
 /// Something bolted just left its footing. The audio module plays the twang
-/// off this rather than being called, so deleting the sound changes nothing.
+/// off this rather than being called, so deleting the sound changes nothing,
+/// and `mood::schadenfreude` reads the crowd's delight off it the same way.
 #[derive(Message, Debug, Clone, Copy)]
 pub struct PropSheared {
     pub position: Vec3,
+    /// How fast whatever sheared it arrived, in m/s.
+    pub speed: f32,
+    /// What just went airborne, in kilograms. A parking meter at speed is
+    /// funnier than a cone nudged over, and the listeners need the numbers
+    /// to know the difference.
+    pub mass: f32,
 }
 
 /// A sheared hydrant's stump, throwing water.
@@ -70,6 +77,14 @@ pub struct PropSheared {
 pub struct Geyser {
     pub life: Timer,
 }
+
+/// On a prop that `shear()` sent flying. The pavement reads it as something
+/// to run from while it is still moving fast enough to matter; the marker
+/// simply stays on afterwards, because the speed filter on the reading side
+/// ages it out for free and removing components on settle would be a system
+/// for nothing.
+#[derive(Component)]
+pub struct SentFlying;
 
 /// One thrown droplet. Animated by hand rather than given to the solver:
 /// a geyser is a hundred of these a second and none of them needs to push
@@ -103,7 +118,7 @@ impl Plugin for MayhemPlugin {
             .add_systems(Startup, setup_assets)
             .add_systems(
                 Update,
-                (shear_props, erupt_geysers, fly_droplets)
+                (shear_props, erupt_geysers, toss_over_geysers, fly_droplets)
                     .chain()
                     .in_set(GameSet::Simulation),
             );
@@ -219,9 +234,12 @@ pub fn shear(
         Mass(breakaway.mass),
         LinearVelocity(carried),
         AngularVelocity(tumble),
+        SentFlying,
     ));
     sheared.write(PropSheared {
         position: transform.translation,
+        speed: velocity.length(),
+        mass: breakaway.mass,
     });
 
     if breakaway.geyser {
@@ -250,6 +268,64 @@ pub fn shear(
 /// most of its life looking broken rather than glorious.
 pub fn pressure(elapsed: f32) -> f32 {
     ((1.0 - elapsed) / 0.25).clamp(0.0, 1.0)
+}
+
+/// Upward speed the water hands somebody standing on the stump, in m/s.
+/// Pure so the treat/insult line can be argued in a test.
+pub fn toss_speed(head: f32, toss: f32) -> f32 {
+    if head <= 0.0 {
+        return 0.0;
+    }
+    // Never below 60% of full send while there is pressure at all: a weak
+    // little hop off a dying geyser reads as a stumble, not a ride.
+    toss * (0.6 + 0.4 * head)
+}
+
+/// The geyser's own verb: a flummi who blunders onto an active stump goes up
+/// with the water. Gently — see `SchadenfreudeConfig::geyser_toss`, which is
+/// held below the bop limit so `mood::feeling::jolt` reads the landing as a
+/// friendly bop and the ride *lifts* the rider's mood. `wheee` plays off the
+/// `KnockedDown` this inserts, and `KnockedDown`'s window is also the reason
+/// this cannot machine-gun anybody: no re-toss until they are back on their
+/// feet — at which point landing back on the stump goes up again, which is
+/// the joke.
+fn toss_over_geysers(
+    mut commands: Commands,
+    config: Res<crate::core::config::GameConfig>,
+    geysers: Query<(&Geyser, &Transform)>,
+    mut victims: Query<
+        (&Transform, Entity, &mut LinearVelocity),
+        (
+            With<crate::bounce::controller::Bouncer>,
+            Without<Vehicle>,
+            Without<crate::player::interact::Driving>,
+            Without<crate::bounce::launch::KnockedDown>,
+        ),
+    >,
+) {
+    let tune = &config.schadenfreude;
+    for (geyser, stump) in &geysers {
+        let head = pressure(geyser.life.fraction());
+        if head <= 0.0 {
+            continue;
+        }
+        for (transform, victim, mut velocity) in &mut victims {
+            let offset = (transform.translation - stump.translation).with_y(0.0);
+            if offset.length_squared() > tune.geyser_toss_radius * tune.geyser_toss_radius {
+                continue;
+            }
+            // A little push off the stump so the arc lands beside it rather
+            // than straight back on — deterministic from the offset, no
+            // stream needed. Somebody dead centre goes straight up.
+            let aside = offset.normalize_or_zero() * 1.2;
+            crate::bounce::launch::launch(
+                &mut commands,
+                victim,
+                &mut velocity,
+                Vec3::Y * toss_speed(head, tune.geyser_toss) + aside,
+            );
+        }
+    }
 }
 
 fn erupt_geysers(
@@ -313,6 +389,25 @@ fn fly_droplets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_geyser_toss_is_a_treat_rather_than_an_insult() {
+        // The whole gag depends on this ordering: the landing must read as a
+        // friendly bop to `mood::feeling::jolt`, or the fountain starts feuds
+        // instead of rides. Full pressure is the hardest toss there is.
+        let config = crate::core::config::GameConfig::default();
+        let hardest = toss_speed(1.0, config.schadenfreude.geyser_toss);
+        assert!(hardest < config.mood.bop_limit);
+        assert_eq!(hardest, config.schadenfreude.geyser_toss);
+    }
+
+    #[test]
+    fn a_spent_geyser_tosses_nobody() {
+        assert_eq!(toss_speed(0.0, 5.8), 0.0);
+        assert_eq!(toss_speed(-0.1, 5.8), 0.0);
+        // But any pressure at all still gives a real ride, not a stumble.
+        assert!(toss_speed(0.01, 5.8) > 5.8 * 0.5);
+    }
 
     #[test]
     fn a_sheared_prop_leaves_with_the_car_rather_than_against_it() {

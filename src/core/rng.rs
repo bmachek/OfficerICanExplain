@@ -41,6 +41,12 @@ pub mod stream {
     /// must still not draw from a generation stream, or knocking a hydrant
     /// over would reshuffle where the props around it spawn.
     pub const MAYHEM: u64 = 13;
+    /// Bystander reaction rolls: who laughs at a wallop and who takes against
+    /// it. Emphatically not `MOOD`, although the subject matter is mood — that
+    /// stream's draw order fixes which temperament each spawned citizen gets,
+    /// so a crash pulling a draw from it would quietly re-cast the city's
+    /// future residents.
+    pub const WITNESS: u64 = 14;
 }
 
 const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;

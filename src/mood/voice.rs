@@ -130,7 +130,7 @@ impl Plugin for VoicePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Turn>().add_systems(
             Update,
-            (gasp_at_wallops, speak_up)
+            (gasp_at_wallops, squeal_in_fright, speak_up)
                 .chain()
                 .in_set(GameSet::Ai)
                 // The bank is synthesised in `Startup`; nothing here can run
@@ -244,6 +244,40 @@ fn gasp_at_wallops(
         // Long enough that the gasp is heard on its own. What they think about
         // it lands a moment later, which is the funnier order.
         voice.cooldown = voice.cooldown.max(0.8);
+    }
+}
+
+/// Inside the turn-taking gate, unlike the gasp: fright is *common* — one
+/// hard braking can scare six flummis at once, and six simultaneous shrieks
+/// are a horror film, not a comedy. One squeal per turn window carries the
+/// scene; the rest of the scare is visible in the running anyway.
+fn squeal_in_fright(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    bank: Res<SoundBank>,
+    mut turn: ResMut<Turn>,
+    mut frights: MessageReader<crate::ai::pedestrian::TookFright>,
+    mut flummis: Query<(&Transform, &mut Voicebox)>,
+) {
+    for fright in frights.read() {
+        if turn.0 > 0.0 {
+            continue;
+        }
+        let Ok((transform, mut voice)) = flummis.get_mut(fright.entity) else {
+            continue;
+        };
+        if voice.cooldown > 0.0 {
+            continue;
+        }
+        commands.spawn((
+            AudioPlayer(bank.squeal.clone()),
+            spatial_once(effect_gain(&config, GAIN), EARSHOT).with_speed(voice.pitch),
+            Transform::from_translation(transform.translation + MOUTH),
+        ));
+        // Longer than a remark's rest: whoever just shrieked has nothing to
+        // add for a moment, and the silence after a squeal is part of it.
+        voice.cooldown = voice.cooldown.max(1.2);
+        turn.0 = TURN_TAKING;
     }
 }
 

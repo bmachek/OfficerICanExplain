@@ -55,15 +55,20 @@ pub struct SoundBank {
     pub giggle: Handle<SynthSound>,
     pub grumble: [Handle<SynthSound>; VARIANTS],
     pub curse: [Handle<SynthSound>; VARIANTS],
-    /// The taunt rotation: raspberry, fart, cough, spit. One would wear out
-    /// inside a minute; the game's whole verb deserves a repertoire.
+    /// The taunt rotation: raspberry, fart, cough, spit, burp. One would wear
+    /// out inside a minute; the game's whole verb deserves a repertoire.
     pub raspberry: Handle<SynthSound>,
     pub fart: Handle<SynthSound>,
     pub cough: Handle<SynthSound>,
     pub spit: Handle<SynthSound>,
+    pub burp: Handle<SynthSound>,
     /// Making up: two contrite syllables, thrown with a flower.
     pub sorry: Handle<SynthSound>,
     pub gasp: Handle<SynthSound>,
+    /// Taking fright: a short falling shriek, played off `TookFright` by
+    /// `mood::voice::squeal_in_fright`. A mouth noise like the cough and the
+    /// spit, so it may take a recording; the synth version stands in.
+    pub squeal: Handle<SynthSound>,
 }
 
 /// How many takes of each spoken sound the bank holds.
@@ -126,8 +131,10 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         fart: sounds.add(shot("fart", 0.85, fart)),
         cough: sounds.add(shot("cough", 0.8, cough)),
         spit: sounds.add(shot("spit", 0.7, spit)),
+        burp: sounds.add(shot("burp", 0.85, burp)),
         sorry: sounds.add(shot("sorry", 0.6, sorry)),
         gasp: sounds.add(gasp()),
+        squeal: sounds.add(shot("squeal", 0.7, squeal)),
     }
 }
 
@@ -156,8 +163,10 @@ pub fn every_one_shot() -> Vec<(String, SynthSound)> {
         ("fart".to_string(), fart()),
         ("cough".to_string(), cough()),
         ("spit".to_string(), spit()),
+        ("burp".to_string(), burp()),
         ("sorry".to_string(), sorry()),
         ("gasp".to_string(), gasp()),
+        ("squeal".to_string(), squeal()),
     ];
     for take in 0..VARIANTS {
         all.push((format!("whistle-{take}"), whistle(take)));
@@ -505,6 +514,40 @@ fn whistle(take: usize) -> SynthSound {
     let mut out = voice::whistle(&mut rng, &notes, 1.15);
     fade_edges(&mut out, 0.012);
     normalize(&mut out, 0.55);
+    SynthSound::new(out)
+}
+
+/// Two low ragged syllables sliding downwards. The *recorded* burp is the
+/// joke (rubberduck's creature pack, fetched with cough and spit); this is
+/// only what a fresh clone hears until the fetch script has run.
+fn burp() -> SynthSound {
+    let mut rng = audio_stream(37);
+    let base = SPEAKING_HZ * 0.42;
+    let syllables = [
+        Syllable::new(voice::OH, base, 0.22)
+            .onset(Onset::Plosive)
+            .bend(0.8),
+        Syllable::new(voice::OH, base * 0.85, 0.3)
+            .bend(0.7)
+            .gain(0.8),
+    ];
+    let mut out = voice::utter(&mut rng, &syllables);
+    fade_edges(&mut out, 0.006);
+    normalize(&mut out, 0.85);
+    SynthSound::new(out)
+}
+
+/// One high syllable bent hard downwards: the shape of a startle. The
+/// giggle's rise is the shape of a joke; the same energy falling is somebody
+/// getting out of the way of one.
+fn squeal() -> SynthSound {
+    let mut rng = audio_stream(36);
+    let syllable = Syllable::new(voice::EE, SPEAKING_HZ * 3.4, 0.34)
+        .onset(Onset::Plosive)
+        .bend(0.5);
+    let mut out = voice::utter(&mut rng, &[syllable]);
+    fade_edges(&mut out, 0.004);
+    normalize(&mut out, 0.7);
     SynthSound::new(out)
 }
 

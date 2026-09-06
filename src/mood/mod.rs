@@ -10,6 +10,7 @@ pub mod face;
 pub mod feeling;
 pub mod grudge;
 pub mod provoke;
+pub mod schadenfreude;
 pub mod voice;
 
 use bevy::prelude::*;
@@ -32,15 +33,18 @@ impl Plugin for MoodPlugin {
             provoke::ProvokePlugin,
             grudge::GrudgePlugin,
             apology::ApologyPlugin,
+            schadenfreude::SchadenfreudePlugin,
         ))
         .add_systems(Startup, build_faces)
         .add_systems(
             Update,
             // After the mood systems, which are also in `Ai`: the face is
-            // read from a mood that has already settled this frame.
+            // read from a mood that has already settled this frame — the
+            // felt half and the witnessed half both.
             face::wear_the_mood
                 .in_set(GameSet::Ai)
-                .after(feeling::Feeling),
+                .after(feeling::Feeling)
+                .after(schadenfreude::Witnessing),
         );
 
         // Baked in only when a capture asked for it, so an ordinary run never

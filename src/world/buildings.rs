@@ -514,6 +514,13 @@ fn spawn_building(
         RigidBody::Static,
         // Unit cube: Avian scales it by the transform above.
         Collider::cuboid(1.0, 1.0, 1.0),
+        // Walls are the one thing in the city that is not rubber. Brushing a
+        // facade at a sprint used to fling the player back across the
+        // pavement, which read as nagging rather than comedy — the fun
+        // bounces are the ground under a launch and body-on-body, and both
+        // keep the default. `Min` outranks the world's `Average`, so the
+        // zero actually wins the contact.
+        Restitution::new(0.0).with_combine_rule(CoefficientCombine::Min),
     ));
 
     // A capping slab, slightly oversailing the walls. It hides the windowed top

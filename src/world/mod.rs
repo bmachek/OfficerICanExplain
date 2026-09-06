@@ -52,11 +52,17 @@ impl Plugin for WorldPlugin {
             mayhem::MayhemPlugin,
         ))
         // Everything in this city is made of rubber, and the solver is where
-        // that is decided. `Max` rather than the default average: a rubber ball
-        // bounces off concrete because *it* is elastic, and asking concrete to
-        // agree would flatten every bounce against the world by half.
+        // that is decided. This used to be `Max` so that a rubber ball would
+        // bounce off concrete on its own elasticity — but `Max` also outranks
+        // every other combine rule, which made each building wall a trampoline
+        // nothing could opt out of, and sprinting into a facade threw the
+        // player back across the pavement. `Average` behaves identically for
+        // every default pair (both sides carry the same 0.62, and the average
+        // of a number with itself is itself), while letting a wall carry
+        // `Restitution 0` with the higher-priority `Min` rule and actually be
+        // heard (`buildings::spawn_walls`).
         .insert_resource(DefaultRestitution(
-            Restitution::new(bounce.restitution).with_combine_rule(CoefficientCombine::Max),
+            Restitution::new(bounce.restitution).with_combine_rule(CoefficientCombine::Average),
         ))
         .insert_resource(avian3d::dynamics::solver::SolverConfig {
             restitution_threshold: bounce.threshold,

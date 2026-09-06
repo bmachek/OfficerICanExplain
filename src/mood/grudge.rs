@@ -78,6 +78,18 @@ pub struct Pirouette {
     pub towards: Option<Entity>,
 }
 
+impl Pirouette {
+    /// A spin with nobody to bump: what a delighted witness does on the spot
+    /// when somebody else's afternoon goes wrong entertainingly
+    /// (`super::schadenfreude`).
+    pub fn solo() -> Self {
+        Self {
+            left: SPIN_SECONDS,
+            towards: None,
+        }
+    }
+}
+
 pub struct GrudgePlugin;
 
 impl Plugin for GrudgePlugin {

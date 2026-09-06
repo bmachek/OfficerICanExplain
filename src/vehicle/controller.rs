@@ -225,7 +225,17 @@ fn update_steering(
     // Positive input is "right", which is a negative yaw about +Y.
     let target = -input.steer.clamp(-1.0, 1.0) * lock;
 
-    let blend = 1.0 - (-spec.steer_rate * dt).exp();
+    // Asymmetric on purpose. The first cure for "laggy" was raising the rate
+    // wholesale, which overshot into twitchy: digital keys slamming to full
+    // lock at 13/s put every car sideways. What actually reads as direct is
+    // the *release* — letting go must centre the wheel promptly so a
+    // correction is possible at all — while the turn-in can stay calm.
+    let rate = if target.abs() < state.steer_angle.abs() {
+        spec.steer_rate * 1.6
+    } else {
+        spec.steer_rate
+    };
+    let blend = 1.0 - (-rate * dt).exp();
     state.steer_angle += (target - state.steer_angle) * blend;
 }
 

@@ -297,7 +297,13 @@ fn announce(
             // predictable sequence reads as a jukebox and an unpredictable
             // one reads as a person deciding how rude to be today.
             Rudeness::Taunt => {
-                let rude = [&bank.raspberry, &bank.fart, &bank.cough, &bank.spit];
+                let rude = [
+                    &bank.raspberry,
+                    &bank.fart,
+                    &bank.cough,
+                    &bank.spit,
+                    &bank.burp,
+                ];
                 rude[rng.random_range(0..rude.len())].clone()
             }
             Rudeness::Cheer => bank.whistle[rng.random_range(0..VARIANTS)].clone(),
