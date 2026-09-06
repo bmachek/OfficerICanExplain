@@ -60,14 +60,14 @@ bevy_egui, saves are RON.
 
 | Module | What lives there |
 |---|---|
-| `core` | States, schedule sets, `GameConfig` tunables, deterministic RNG, asset-root resolution, the screenshot harness |
+| `core` | States, schedule sets, `GameConfig` tunables, persisted settings/keybindings (`core::settings`), deterministic RNG, asset-root resolution, the screenshot harness |
 | `world` | City generator, road graph, chunk streaming, day/night, weather, facades/LOD shells, window interiors, road wear, vegetation, props, procedural + scanned textures |
 | `bounce` | The elastic simulation: bounce controller, impact response, launch, squash |
 | `player` | Input mapping, on-foot movement, camera rig, enter/exit |
 | `vehicle` | Arcade vehicle physics, specs, bodywork, damage, lights, parked-car spawning |
 | `ai` | Traffic, pedestrians, shared steering, walk cycles |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, volumetrics, post stack |
-| `ui` | HUD, minimap, egui dev tuning panel |
+| `ui` | HUD, minimap, egui dev tuning panel, the `Escape` pause menu |
 | `audio` | Startup waveform synthesis, the sound bank, triggers |
 | `save` | RON quick save / load |
 
@@ -93,12 +93,15 @@ not: seed, player position, hour. Bump `SAVE_VERSION` on any incompatible change
 
 `core::schedule::GameSet` is the one ordering for game logic:
 `Input → Ai → Simulation → Camera → Ui`, chained in `Update`, with `Ai`,
-`Simulation` and `Camera` gated on `AppState::InGame`. Put new gameplay systems
-in a set rather than growing `.after()` chains across plugins. Physics is
-deliberately outside it — Avian owns `PhysicsSchedule`, and vehicle forces are
-applied in `FixedUpdate` (`vehicle::controller`) because Avian clears forces
-each tick. States are `AppState` (Loading/Menu/InGame) with an `InGameState`
-sub-state; startup currently skips straight into the game.
+`Simulation` and `Camera` gated on both `AppState::InGame` and
+`InGameState::Playing`. Put new gameplay systems in a set rather than growing
+`.after()` chains across plugins. Physics is deliberately outside it — Avian
+owns `PhysicsSchedule`, and vehicle forces are applied in `FixedUpdate`
+(`vehicle::controller`) because Avian clears forces each tick — which is also
+why `ui::menu` pauses `Time<Physics>` itself rather than relying on the
+`GameSet` gate alone when `Escape` opens the pause menu (`InGameState::Paused`).
+States are `AppState` (Loading/Menu/InGame) with an `InGameState` sub-state;
+startup currently skips straight into the game.
 
 ### Layout vs. entities
 

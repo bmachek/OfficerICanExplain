@@ -6,7 +6,7 @@
 
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use leafwing_input_manager::prelude::ActionState;
 
 use crate::ai::pedestrian::Pedestrian;
@@ -27,7 +27,7 @@ pub struct DebugUiPlugin;
 
 impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((EguiPlugin::default(), FpsOverlayPlugin::default()))
+        app.add_plugins(FpsOverlayPlugin::default())
             .add_systems(EguiPrimaryContextPass, (tuning_panel, vehicle_panel));
     }
 }

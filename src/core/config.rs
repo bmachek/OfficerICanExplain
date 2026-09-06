@@ -142,6 +142,10 @@ pub struct CameraConfig {
     pub speed: f32,
     pub boost_multiplier: f32,
     pub mouse_sensitivity: f32,
+    /// Flips vertical mouse look. Off by default; some players' hands only
+    /// work the other way, and that preference is old enough to predate this
+    /// genre.
+    pub invert_look_y: bool,
     /// How hard the view swings itself in behind the direction of travel, as
     /// an exponential rate in reciprocal seconds. 0 turns it off entirely.
     pub auto_follow: f32,
@@ -194,6 +198,7 @@ impl Default for GameConfig {
                 speed: 25.0,
                 boost_multiplier: 5.0,
                 mouse_sensitivity: 0.002,
+                invert_look_y: false,
                 auto_follow: 3.0,
                 auto_follow_delay: 0.7,
             },
@@ -204,14 +209,6 @@ impl Default for GameConfig {
             },
             graphics: GraphicsSettings::default(),
         }
-    }
-}
-
-pub struct ConfigPlugin;
-
-impl Plugin for ConfigPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<GameConfig>();
     }
 }
 
