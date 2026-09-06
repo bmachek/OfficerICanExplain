@@ -3,7 +3,7 @@ name = "officer_i_can_explain"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
-description = "An original open-world crime sandbox"
+description = "An original open-world comedy sandbox"
 publish = false
 
 [features]

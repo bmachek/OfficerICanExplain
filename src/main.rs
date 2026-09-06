@@ -1,4 +1,4 @@
-//! Officer, I Can Explain — an original open-world crime sandbox.
+//! Mood Swings — an original open-world comedy sandbox.
 //!
 //! Every asset is generated procedurally at runtime; no third-party art,
 //! trademarks or IP are used anywhere in this project.
@@ -38,7 +38,10 @@ use bevy::prelude::*;
 use bevy::window::PresentMode;
 
 /// Shown in the window title bar and on the title screen.
-pub const GAME_TITLE: &str = "Officer, I Can Explain";
+///
+/// Both halves are meant literally: everyone here swings, and what they swing
+/// is a mood. The crate is still named after the crime sandbox this used to be.
+pub const GAME_TITLE: &str = "Mood Swings";
 
 fn main() {
     // Writes the sound bank out as WAV files and stops. No app, no window:
