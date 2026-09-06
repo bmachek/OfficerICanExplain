@@ -68,6 +68,9 @@ pub struct VehicleAssets {
     /// A van's glazing, which cannot be seen through because there is nothing
     /// behind it but the outside of the box it is lying on.
     dark_glass: Handle<StandardMaterial>,
+    /// Shared by every car: the flake is a property of automotive paint, not
+    /// of one car's paint, and the colour that varies is in the material.
+    flake: Handle<Image>,
     trim: super::trim::TrimKit,
 }
 
@@ -147,6 +150,7 @@ pub fn build_assets(
             perceptual_roughness: 0.24,
             ..glazing(1.0)
         }),
+        flake: images.add(super::paint::flake()),
         trim: super::trim::build_kit(meshes, materials, images),
     }
 }
@@ -188,15 +192,20 @@ pub fn spawn_vehicle(
     // Car paint is a coloured base under a clear lacquer, and modelling it that
     // way rather than as "shiny metal" is what makes the highlight sit *on* the
     // panel instead of tinting itself the colour of the car.
+    let finish = super::paint::finish(spec.body_color, spec.body_metallic, 0.0);
     let paint = materials.add(StandardMaterial {
-        base_color: spec.body_color,
-        // Flake in the basecoat, then lacquer over the top. Metallic paint is
-        // rougher underneath than solid paint and reads duller for it, which is
-        // why the roughness moves with the flake rather than staying put.
-        perceptual_roughness: 0.30 + spec.body_metallic * 0.22,
-        metallic: spec.body_metallic,
-        clearcoat: 1.0,
+        base_color: finish.base_color,
+        perceptual_roughness: finish.perceptual_roughness,
+        metallic: finish.metallic,
+        clearcoat: finish.clearcoat,
         clearcoat_perceptual_roughness: 0.08,
+        // The facets. See `paint::flake` for why this is a normal map and not
+        // the anisotropy the plan asked for.
+        normal_map_texture: Some(assets.flake.clone()),
+        // The loft's UVs run nought to one over the whole car, so the tile has
+        // to be brought down to the size of a hand before it is flake rather
+        // than dents.
+        uv_transform: bevy::math::Affine2::from_scale(super::paint::FLAKE_TILING),
         ..default()
     });
 
