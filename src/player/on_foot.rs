@@ -18,6 +18,7 @@ use bevy::prelude::*;
 use leafwing_input_manager::prelude::ActionState;
 
 use crate::bounce::controller::{Bouncer, JUMP_SCALE};
+use crate::core::config::GameConfig;
 use crate::core::schedule::GameSet;
 use crate::core::settings::KeyBindings;
 use crate::mood::face::FaceLevel;
@@ -112,6 +113,7 @@ fn spawn_player(
 }
 
 fn drive_player(
+    config: Res<GameConfig>,
     rigs: Query<&CameraRig>,
     mut players: Query<
         (&ActionState<Action>, &mut Bouncer, &mut Transform),
@@ -144,9 +146,16 @@ fn drive_player(
         transform.rotation = Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(*facing));
     }
 
+    // The resting hop is set every frame — the controller spends the scale on
+    // each landing, the same contract `ai::pedestrian` uses for the crowd. See
+    // `BounceConfig::player_hop_scale` for why the player of all people
+    // bounces least.
+    bouncer.hop_scale = config.bounce.player_hop_scale;
+
     // Only off the ground. Held down, this would otherwise be a pogo stick with
     // no ceiling: every landing would take the bigger hop, and each one lands
-    // faster than the last.
+    // faster than the last. Absolute rather than scaled by the resting hop, so
+    // dialling the walk-bounce down does not also cost jump height.
     if action_state.pressed(&Action::Jump) && bouncer.grounded {
         bouncer.hop_scale = JUMP_SCALE;
     }

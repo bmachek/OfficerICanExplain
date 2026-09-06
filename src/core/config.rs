@@ -162,6 +162,17 @@ pub struct BounceConfig {
     /// blows pirouette; head-on ones tip.
     #[serde(default = "default_crash_spin")]
     pub crash_spin: f32,
+    /// The player's resting hop, as a fraction of `hop_speed`. Deliberately
+    /// below the whole crowd's range: the camera rides the player's hop
+    /// almost 1:1, so a scale that looks lively on a citizen across the
+    /// street reads as seasickness from the navel the view is bolted to.
+    /// The others do the bouncing; the player mostly watches them do it.
+    #[serde(default = "default_player_hop_scale")]
+    pub player_hop_scale: f32,
+    /// Ceiling on how high delight scales a citizen's hop. This is where the
+    /// bounce the player gave up went.
+    #[serde(default = "default_npc_spring_max")]
+    pub npc_spring_max: f32,
 }
 
 fn default_apology_range() -> f32 {
@@ -171,6 +182,12 @@ fn default_apology_balm() -> f32 {
     GameConfig::default().mood.apology_balm
 }
 
+fn default_player_hop_scale() -> f32 {
+    GameConfig::default().bounce.player_hop_scale
+}
+fn default_npc_spring_max() -> f32 {
+    GameConfig::default().bounce.npc_spring_max
+}
 fn default_crash_rebound() -> f32 {
     GameConfig::default().bounce.crash_rebound
 }
@@ -307,6 +324,8 @@ impl Default for GameConfig {
                 crash_rebound: 0.6,
                 crash_pop: 0.28,
                 crash_spin: 0.35,
+                player_hop_scale: 0.6,
+                npc_spring_max: 1.5,
             },
             mood: MoodConfig {
                 contagion_radius: 9.0,
@@ -388,5 +407,28 @@ mod tests {
         let parsed: GameConfig = ron::from_str(&text).expect("old options should parse");
         assert_eq!(parsed.audio.master, 0.42);
         assert_eq!(parsed.window.resolution, Resolution::default());
+    }
+
+    #[test]
+    fn an_options_file_without_the_hop_dials_still_parses() {
+        // What a bounce section looked like before `player_hop_scale` and
+        // `npc_spring_max` landed: the fields simply absent.
+        let mut old = ron::ser::to_string(&GameConfig::default()).unwrap();
+        for field in ["player_hop_scale", "npc_spring_max"] {
+            let start = old.find(field).unwrap();
+            let rest = &old[start..];
+            // The section's last field ends at `)` rather than `,`.
+            let comma = rest.find(',');
+            let paren = rest.find(')').unwrap();
+            let end = match comma {
+                Some(comma) if comma < paren => start + comma + 1,
+                _ => start + paren,
+            };
+            old.replace_range(start..end, "");
+        }
+        let parsed: GameConfig = ron::from_str(&old).expect("old options should parse");
+        let fresh = GameConfig::default().bounce;
+        assert_eq!(parsed.bounce.player_hop_scale, fresh.player_hop_scale);
+        assert_eq!(parsed.bounce.npc_spring_max, fresh.npc_spring_max);
     }
 }

@@ -390,9 +390,16 @@ pub fn activate_nearby_vehicles(
 
 /// Positions each wheel mesh from its suspension state.
 pub fn update_wheel_visuals(
+    time: Res<Time>,
     vehicles: Query<(&VehicleState, &VehicleSpec, &Children)>,
     mut wheels: Query<(&WheelVisual, &mut Transform)>,
 ) {
+    // The ray lengths are sampled per 64Hz physics tick. The body is eased
+    // between ticks by the interpolation plugin, but these are plain state
+    // fields, so drawn raw the meshes closest to the camera stair-step
+    // against a smooth body over every bump. Blended at 30/s the lag is a
+    // frame or two — invisible under deliberately underdamped springs.
+    let blend = 1.0 - (-30.0 * time.delta_secs()).exp();
     for (state, spec, children) in &vehicles {
         let anchors = spec.wheel_anchors();
         for child in children.iter() {
@@ -404,7 +411,12 @@ pub fn update_wheel_visuals(
 
             // The mesh hangs below its anchor by however much suspension is extended.
             let drop = wheel_state.ray_length - spec.wheel_radius;
-            transform.translation = anchors[index] - Vec3::Y * drop;
+            let target = anchors[index] - Vec3::Y * drop;
+            transform.translation = Vec3::new(
+                target.x,
+                transform.translation.y + (target.y - transform.translation.y) * blend,
+                target.z,
+            );
 
             let steer = if VehicleSpec::is_front(index) {
                 Quat::from_rotation_y(state.steer_angle)

@@ -60,6 +60,7 @@ just looks worse. Nothing is checked in and nothing is required to build.
 | **F** | Enter / exit vehicle |
 | **Left mouse** | Taunt — a raspberry, and everybody in earshot takes it personally |
 | **Right mouse** | Cheer — a whistle, which does the opposite and carries further |
+| **Middle mouse** | Apologise — throw a flower at whoever holds a grudge against you |
 | **M** | Full-screen map |
 | **F1** | Free-fly debug camera (hold right mouse to look) |
 | **F5 / F9** | Quick save / quick load |
@@ -75,7 +76,8 @@ toggle, audio and graphics. Settings persist to `saves/options.ron`; the
 world state from a save goes to `saves/quicksave.ron`, same as before.
 
 Gamepad is mapped throughout: left stick moves, right stick looks, A jumps,
-Y interacts, right trigger taunts, left trigger cheers, B is the handbrake.
+Y interacts, right trigger taunts, left trigger cheers, X throws the flower,
+B is the handbrake.
 
 The menu and the HUD speak German. Everything a developer reads — the dev
 panel, the log, the code — is English.

@@ -92,6 +92,9 @@ fn tuning_panel(
             ui.add(egui::Slider::new(&mut config.audio.ambience, 0.0..=1.5).text("ambience"));
 
             ui.separator();
+            bounce_section(ui, &mut config);
+
+            ui.separator();
             mood_section(ui, &mut commands, &mut config, &mut tempers, &city, &crowd);
 
             ui.separator();
@@ -139,6 +142,19 @@ fn tuning_panel(
 /// to decide what to do about the one currently chasing you — the panel simply
 /// offers to clear the crowd. `maintain_population` refills it from the new
 /// table within a second or two, which is both simpler and easier to believe.
+/// The hop dials. Deliberately not the whole of `BounceConfig`: `restitution`
+/// and `threshold` are read once at plugin build into `DefaultRestitution`
+/// and `SolverConfig` (`world::mod`), so a slider for them would move nothing
+/// and teach the wrong lesson about what is live.
+fn bounce_section(ui: &mut egui::Ui, config: &mut GameConfig) {
+    ui.label(egui::RichText::new("bounce").strong());
+    let b = &mut config.bounce;
+    ui.add(egui::Slider::new(&mut b.hop_speed, 0.5..=6.0).text("hop m/s"));
+    ui.add(egui::Slider::new(&mut b.player_hop_scale, 0.0..=1.5).text("player hop"));
+    ui.add(egui::Slider::new(&mut b.npc_spring_max, 1.0..=2.5).text("npc spring max"));
+    ui.add(egui::Slider::new(&mut b.squash, 0.0..=0.8).text("squash"));
+}
+
 fn mood_section(
     ui: &mut egui::Ui,
     commands: &mut Commands,

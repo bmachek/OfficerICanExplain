@@ -102,7 +102,13 @@ pub fn drive_vehicles(
         let center_of_mass = transform.transform_point(spec.center_of_mass);
         state.forward_speed = linear.dot(forward);
 
-        update_steering(spec, input, &mut state, speed, dt);
+        // Steering tightens with *road* speed, not velocity magnitude: the
+        // magnitude includes the vertical bob of deliberately soft springs and
+        // the sideways component of a slide, so using it made the lock wobble
+        // over bumps and shrink further mid-slide — at exactly the moment the
+        // driver is trying to steer out of it.
+        let road_speed = state.forward_speed.abs();
+        update_steering(spec, input, &mut state, road_speed, dt);
 
         let anchors = spec.wheel_anchors();
         let max_ray = spec.max_ray_length();

@@ -85,6 +85,9 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
     let looped = |name: &str, peak: f32, synth: fn() -> SynthSound| {
         super::files::looping(&dir, name, peak).unwrap_or_else(synth)
     };
+    let shot_take = |name: &str, take: usize, peak: f32, synth: fn(usize) -> SynthSound| {
+        super::files::one_shot_take(&dir, name, take, peak).unwrap_or_else(|| synth(take))
+    };
 
     SoundBank {
         boing: sounds.add(shot("boing", 0.85, boing)),
@@ -110,9 +113,12 @@ pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
         // the wrong place: those are mouth noises rather than speech — nobody
         // hears a word in a recorded cough — and they play with per-shot
         // jitter, not a per-speaker pitch. So they take recordings like every
-        // other effect, and the whistle, giggle, grumble, curse and gasp stay
-        // instruments.
-        whistle: std::array::from_fn(|take| sounds.add(whistle(take))),
+        // other effect. The whistle crossed the same line next: whistled
+        // notes carry no words either, and the synthesised tunes read as a
+        // doorbell where a recorded human whistling reads as a mood — so each
+        // take looks for `whistle-<n>` on disk first, falling back per take.
+        // The giggle, grumble, curse and gasp stay instruments.
+        whistle: std::array::from_fn(|take| sounds.add(shot_take("whistle", take, 0.55, whistle))),
         giggle: sounds.add(giggle()),
         grumble: std::array::from_fn(|take| sounds.add(grumble(take))),
         curse: std::array::from_fn(|take| sounds.add(curse(take))),
