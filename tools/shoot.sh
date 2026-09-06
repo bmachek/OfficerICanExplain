@@ -11,7 +11,11 @@
 # The dawn framing is the one carrying hard coordinates rather than `--at-node`,
 # and they are the default seed's: it has to look *into* the low sun down an open
 # street, because that is the direction the air lights up from, and a node number
-# says nothing about which way its streets run.
+# says nothing about which way its streets run. The face and street-mood
+# framings carry coordinates for the same reason and one more: they have to be
+# pointed at the *player*, and `--at-node` puts the camera somewhere else in the
+# city entirely — where there is nobody, because the crowd is spawned around
+# whoever is playing.
 #
 # Weather is pinned in every framing, including the ones that do not mention it.
 # It runs on the game clock now, so a shot without `--hour` would drift its own
@@ -51,6 +55,16 @@ FRAMINGS=(
     "showroom|--showroom --hour 11"
     "driving|--follow --drive --frames 2000 --hour 15"
     "map|--follow --map"
+    # The faces, held at three points on the scale by `--mood`. Nothing else
+    # can shoot these: a city has to be *put* in a mood before it wears one,
+    # and waiting for it to arrive there on its own is not a screenshot.
+    "face-angry|--at -4.28,2.15,3.4 --look -4.28,2.12,4.9 --hour 12 --mood -1"
+    "face-calm|--at -4.28,2.15,3.4 --look -4.28,2.12,4.9 --hour 12 --mood 0"
+    "face-happy|--at -4.28,2.15,3.4 --look -4.28,2.12,4.9 --hour 12 --mood 1"
+    # And the street in both moods. Long enough for the crowd to have walked in
+    # from the ring it spawns on and started provoking each other.
+    "rage|--at -4,3,62 --look -4,1.2,10 --hour 12 --frames 240 --mood -1"
+    "delight|--at -4,3,62 --look -4,1.2,10 --hour 12 --frames 240 --mood 1"
 )
 
 presets=()
@@ -73,8 +87,14 @@ done
 # The capture harness renders to an offscreen texture but still opens a window,
 # so an unattended run needs something for it to open onto. Wrapping in Xvfb
 # only when there is no display keeps an interactive run untouched.
-runner=()
-if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+# macOS has neither variable and needs neither: its window server is always
+# there. Without this check every run on a Mac prints a warning about a display
+# it does not use.
+# `command` is a no-op prefix rather than an empty array, because macOS ships
+# bash 3.2, where expanding an empty array under `set -u` is an unbound
+# variable and kills the run on the first shot.
+runner=(command)
+if [[ "$(uname)" != Darwin && -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
     if command -v xvfb-run >/dev/null; then
         runner=(xvfb-run -a)
         echo "no display; running under Xvfb"
@@ -92,7 +112,18 @@ summary=$(mktemp)
 trap 'rm -f "$summary"' EXIT
 
 for preset in "${presets[@]}"; do
-    dir="${out:-shots$([[ ${#presets[@]} -gt 1 ]] && echo "/$preset")}"
+    # Spelt out rather than folded into one `${out:-...}` with a command
+    # substitution in it. The clever version had a `[[ ]] && echo` inside the
+    # substitution, so on a single preset — the common case — the substitution
+    # exited non-zero, and `set -e` killed the script between building and the
+    # first shot, silently and with no output at all.
+    if [[ -n "$out" ]]; then
+        dir="$out"
+    elif [[ ${#presets[@]} -gt 1 ]]; then
+        dir="shots/$preset"
+    else
+        dir="shots"
+    fi
     mkdir -p "$dir"
 
     for framing in "${FRAMINGS[@]}"; do
