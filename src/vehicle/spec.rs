@@ -18,7 +18,6 @@ pub enum VehicleClass {
     Sports,
     Pickup,
     Truck,
-    Police,
 }
 
 impl VehicleClass {
@@ -31,16 +30,9 @@ impl VehicleClass {
         VehicleClass::Truck,
     ];
 
-    /// Every class, including the ones nobody parks. Used to build the meshes
-    /// and to make sure a test covers all of them.
-    pub const ALL: [VehicleClass; 6] = [
-        VehicleClass::Sedan,
-        VehicleClass::Coupe,
-        VehicleClass::Sports,
-        VehicleClass::Pickup,
-        VehicleClass::Truck,
-        VehicleClass::Police,
-    ];
+    /// Every class there is. Used to build the meshes and to make sure a test
+    /// covers all of them.
+    pub const ALL: [VehicleClass; 5] = VehicleClass::CIVILIAN;
 
     pub fn spec(self) -> VehicleSpec {
         match self {
@@ -49,7 +41,6 @@ impl VehicleClass {
             VehicleClass::Sports => VehicleSpec::sports(),
             VehicleClass::Pickup => VehicleSpec::pickup(),
             VehicleClass::Truck => VehicleSpec::truck(),
-            VehicleClass::Police => VehicleSpec::police(),
         }
     }
 }
@@ -77,6 +68,12 @@ pub struct VehicleSpec {
     // --- suspension ---
     pub suspension_rest: f32,
     pub spring_strength: f32,
+    /// Resistance to the spring's own motion, in newtons per m/s.
+    ///
+    /// Set at roughly a fifth of critical, which on a real car would be a
+    /// fault. Here it is the point: the suspension is meant to give the body
+    /// back most of what a kerb puts into it, so that a car crossing a junction
+    /// at speed leaves the ground and lands like everything else in this city.
     pub damping: f32,
     /// Resists body roll by coupling the two wheels on an axle.
     pub anti_roll: f32,
@@ -161,7 +158,7 @@ impl VehicleSpec {
             axle_height: -0.30,
             suspension_rest: 0.48,
             spring_strength: 32_000.0,
-            damping: 3_200.0,
+            damping: 1_280.0,
             anti_roll: 9_000.0,
             engine_force: 13_500.0,
             brake_force: 26_000.0,
@@ -196,7 +193,7 @@ impl VehicleSpec {
             axle_height: -0.28,
             suspension_rest: 0.46,
             spring_strength: 34_000.0,
-            damping: 3_100.0,
+            damping: 1_240.0,
             anti_roll: 8_000.0,
             engine_force: 22_000.0,
             brake_force: 25_000.0,
@@ -231,7 +228,7 @@ impl VehicleSpec {
             axle_height: -0.26,
             suspension_rest: 0.38,
             spring_strength: 36_000.0,
-            damping: 3_600.0,
+            damping: 1_440.0,
             anti_roll: 14_000.0,
             engine_force: 19_000.0,
             brake_force: 30_000.0,
@@ -266,7 +263,7 @@ impl VehicleSpec {
             axle_height: -0.38,
             suspension_rest: 0.56,
             spring_strength: 44_000.0,
-            damping: 4_400.0,
+            damping: 1_760.0,
             anti_roll: 11_000.0,
             engine_force: 18_000.0,
             brake_force: 32_000.0,
@@ -301,7 +298,7 @@ impl VehicleSpec {
             axle_height: -0.42,
             suspension_rest: 0.60,
             spring_strength: 62_000.0,
-            damping: 6_200.0,
+            damping: 2_480.0,
             anti_roll: 16_000.0,
             engine_force: 24_000.0,
             brake_force: 42_000.0,
@@ -318,23 +315,6 @@ impl VehicleSpec {
             roll_couple: 0.45,
             body_color: Color::srgb(0.35, 0.42, 0.52),
             body_metallic: 0.35,
-        }
-    }
-
-    fn police() -> Self {
-        Self {
-            class: VehicleClass::Police,
-            display_name: "Police Cruiser",
-            engine_force: 16_500.0,
-            max_speed: 47.0,
-            front_grip: 1.72,
-            rear_grip: 1.58,
-            // Readable at a glance in shadow; near-black cruisers vanished
-            // against the asphalt exactly when you needed to spot them.
-            body_color: Color::srgb(0.13, 0.26, 0.62),
-            // Fleet paint, not a showroom finish.
-            body_metallic: 0.10,
-            ..Self::sedan()
         }
     }
 }

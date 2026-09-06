@@ -23,10 +23,9 @@
 
 mod ai;
 mod audio;
-mod combat;
+mod bounce;
 mod core;
-mod crime;
-mod mission;
+mod mood;
 mod player;
 mod render;
 mod save;
@@ -42,6 +41,14 @@ use bevy::window::PresentMode;
 pub const GAME_TITLE: &str = "Officer, I Can Explain";
 
 fn main() {
+    // Writes the sound bank out as WAV files and stops. No app, no window:
+    // synthesis does not need one, and hearing a sound is otherwise a matter
+    // of finding the thing in the game that makes it.
+    if let Some(directory) = crate::audio::audition::requested() {
+        crate::audio::audition::write(&directory);
+        return;
+    }
+
     App::new()
         .add_plugins(
             DefaultPlugins
@@ -67,9 +74,8 @@ fn main() {
             crate::core::CorePlugin,
             crate::ai::AiPlugin,
             crate::audio::AudioPlugin,
-            crate::crime::CrimePlugin,
-            crate::combat::CombatPlugin,
-            crate::mission::MissionPlugin,
+            crate::bounce::BouncePlugin,
+            crate::mood::MoodPlugin,
             crate::save::SavePlugin,
             crate::player::PlayerPlugin,
             crate::render::RenderPlugin,

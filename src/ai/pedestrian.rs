@@ -5,16 +5,16 @@
 //! produces the only walkable topology that exists here, and a Recast navmesh
 //! would add a heavy dependency to solve a problem the grid does not have.
 //!
-//! They are kinematic rather than dynamic. A crowd of dynamic ragdolls is
-//! expensive and constantly jostling itself into the road; kinematic bodies
-//! still register against spatial queries, which is what M5's gunfire and
-//! hit-and-run detection actually need from them.
+//! They used to be kinematic bodies whose motion was authored straight onto
+//! `Transform`, which is the cheapest way to move a crowd and the only way to
+//! move one that must never be pushed around. Neither property survives a city
+//! made of rubber: being knocked flying by a car is the point now, and a
+//! kinematic body cannot be. So they are dynamic, and where they walk is
+//! expressed as a velocity the bounce controller steers towards rather than as
+//! a position written each frame.
 //!
-//! Their motion is authored straight onto `Transform` rather than through
-//! `LinearVelocity`. Avian syncs a changed `Transform` back into `Position`, so
-//! writing rotation each frame to face the walk direction silently reverted the
-//! position it had just integrated and every pedestrian stood still. Driving
-//! the transform outright avoids fighting the engine over who owns the pose.
+//! That also retires the ground-following raycast this module used to need.
+//! A dynamic body finds the kerb by landing on it.
 
 use avian3d::prelude::*;
 use bevy::prelude::*;
@@ -22,9 +22,14 @@ use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
 
 use super::steering::right_of;
+use crate::bounce::controller::{Bouncer, Launched};
 use crate::core::config::GameConfig;
 use crate::core::rng::{stream, stream_for};
 use crate::core::schedule::GameSet;
+use crate::mood::face::{FaceAssets, FaceLevel};
+use crate::mood::feeling::{Mood, MoodRng, Tempers};
+use crate::mood::provoke::Provoker;
+use crate::mood::voice::Voicebox;
 use crate::player::on_foot::Player;
 use crate::world::City;
 use crate::world::buildings::SIDEWALK_HEIGHT;
@@ -39,9 +44,11 @@ const DESPAWN: f32 = 165.0;
 const PAVEMENT_OFFSET: f32 = 1.9;
 const RADIUS: f32 = 0.32;
 const HEIGHT: f32 = 1.05;
+/// Distance from the capsule's centre to its lowest point.
+const STAND_HEIGHT: f32 = HEIGHT * 0.5 + RADIUS;
 
 const WALK_SPEED: f32 = 1.5;
-const FLEE_SPEED: f32 = 5.4;
+pub const FLEE_SPEED: f32 = 5.4;
 /// A vehicle closer than this and moving fast enough is worth running from.
 const SCARE_RADIUS: f32 = 14.0;
 const SCARE_SPEED: f32 = 6.0;
@@ -78,6 +85,15 @@ struct PedestrianAssets {
     clothes: Vec<Handle<StandardMaterial>>,
 }
 
+/// Everything that decides where the crowd is walking.
+///
+/// Exported so that anything wanting to override a flummi's intent — somebody
+/// with a grudge, somebody too pleased with themselves to walk in a straight
+/// line — can simply run after it. Both write `Bouncer::desired`, and whichever
+/// runs last is what the body actually does.
+#[derive(SystemSet, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Walking;
+
 pub struct PedestrianPlugin;
 
 impl Plugin for PedestrianPlugin {
@@ -94,6 +110,7 @@ impl Plugin for PedestrianPlugin {
                     super::figure::animate,
                 )
                     .chain()
+                    .in_set(Walking)
                     .in_set(GameSet::Ai),
             );
     }
@@ -148,7 +165,10 @@ fn maintain_population(
     city: Res<City>,
     assets: Res<PedestrianAssets>,
     figures: Res<super::figure::FigureAssets>,
+    faces: Res<FaceAssets>,
     mut rng: ResMut<PedestrianRng>,
+    mut tempers: ResMut<MoodRng>,
+    mix: Res<Tempers>,
     players: Query<&Transform, With<Player>>,
     pedestrians: Query<(Entity, &Transform), With<Pedestrian>>,
 ) {
@@ -204,6 +224,17 @@ fn maintain_population(
         let position = pavement_point(a, b, edge.width, side, t);
         let material = assets.clothes[rng.0.random_range(0..assets.clothes.len())].clone();
 
+        // Drawn from its own stream: a citizen's disposition must not depend on
+        // how many of them have been spawned already, and retuning the mix must
+        // not move anybody's route.
+        let temper = mix.draw(&mut tempers.0);
+        let mood = temper.baseline;
+        let worn = faces.wear(mood);
+        // Their own voice, for as long as they are resident. The same stream as
+        // the temperament: how somebody sounds is part of who they are, and
+        // both are drawn once and never again.
+        let pitch = tempers.0.random_range(0.82..1.28);
+
         let mut person = commands.spawn((
             Name::new("Pedestrian"),
             Pedestrian {
@@ -214,20 +245,22 @@ fn maintain_population(
                 panic: 0.0,
                 current_speed: 0.0,
             },
-            Transform::from_xyz(
-                position.x,
-                SIDEWALK_HEIGHT + HEIGHT * 0.5 + RADIUS,
-                position.y,
-            ),
-            // Kinematic: pushed by nothing, but still visible to raycasts.
-            RigidBody::Kinematic,
+            Transform::from_xyz(position.x, SIDEWALK_HEIGHT + STAND_HEIGHT, position.y),
+            // Dynamic, so a car can send them across the junction.
+            RigidBody::Dynamic,
             Collider::capsule(RADIUS, HEIGHT),
+            // Upright until something knocks them over; `bounce::launch` takes
+            // this off for as long as they are tumbling.
             LockedAxes::ROTATION_LOCKED,
-            crate::combat::health::Health::new(40.0),
-            crate::crime::wanted::Witness,
+            Bouncer::new(STAND_HEIGHT),
+            temper,
+            Mood::new(mood),
+            FaceLevel(worn.level),
+            Voicebox::new(pitch),
+            Provoker::default(),
             Visibility::default(),
         ));
-        super::figure::dress(&mut person, &figures, material, &mut rng.0);
+        super::figure::dress(&mut person, &figures, material, &worn, &mut rng.0);
         alive += 1;
     }
 }
@@ -236,12 +269,11 @@ fn walk_pavements(
     time: Res<Time>,
     mut report: Local<f32>,
     city: Res<City>,
-    spatial: SpatialQuery,
     mut rng: ResMut<PedestrianRng>,
     vehicles: Query<(&Transform, &LinearVelocity), With<crate::vehicle::spawn::Vehicle>>,
     mut pedestrians: Query<
-        (Entity, &mut Pedestrian, &mut Transform),
-        Without<crate::vehicle::spawn::Vehicle>,
+        (&mut Pedestrian, &mut Bouncer, &mut Transform),
+        (Without<crate::vehicle::spawn::Vehicle>, Without<Launched>),
     >,
 ) {
     let dt = time.delta_secs();
@@ -260,7 +292,7 @@ fn walk_pavements(
     }
     let mut sample = None;
 
-    for (entity, mut pedestrian, mut transform) in &mut pedestrians {
+    for (mut pedestrian, mut bouncer, mut transform) in &mut pedestrians {
         let position = transform.translation.xz();
         let a = city.graph.node(pedestrian.from).pos;
         let b = city.graph.node(pedestrian.to).pos;
@@ -316,28 +348,13 @@ fn walk_pavements(
         };
 
         pedestrian.current_speed = if heading == Vec2::ZERO { 0.0 } else { speed };
-        let step = heading * speed * dt;
-        transform.translation.x += step.x;
-        transform.translation.z += step.y;
+        // Asked for rather than applied. The bounce controller owns the body's
+        // velocity; writing the position here would fight it, and Avian would
+        // hand back whichever of the two ran last.
+        bouncer.desired = heading * speed;
 
-        // Follow the ground rather than holding pavement height: crossing a
-        // road otherwise leaves them walking on air the depth of a kerb.
-        //
-        // The cast must exclude the pedestrian itself. Starting it above their
-        // own head means the first thing an unfiltered ray hits is their own
-        // capsule, which reads as ground one body-height up — and they levitate,
-        // gaining a metre and a half every frame.
-        let above = transform.translation + Vec3::Y * 2.0;
-        let filter = SpatialQueryFilter::from_excluded_entities([entity]);
-        if let Some(ground) = spatial.cast_ray(above, Dir3::NEG_Y, 6.0, true, &filter) {
-            let stand = (above.y - ground.distance) + HEIGHT * 0.5 + RADIUS;
-            // Ignore implausible surfaces (another pedestrian, a car roof); a
-            // kerb is centimetres, not metres.
-            if (stand - transform.translation.y).abs() < 1.2 {
-                // Ease on, so a kerb is a step rather than a snap.
-                transform.translation.y = transform.translation.y.lerp(stand, 12.0 * dt);
-            }
-        }
+        // Rotation is locked, so nothing else will turn them to face the way
+        // they are going.
         if heading != Vec2::ZERO {
             transform.rotation =
                 Quat::from_rotation_y(crate::vehicle::spawn::heading_towards(heading));

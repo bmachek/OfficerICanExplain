@@ -5,9 +5,11 @@
 //! synthetic asset with Bevy's audio backend, puts the listener on the camera,
 //! and decides how big the world sounds.
 
+pub mod audition;
 pub mod bank;
 pub mod sfx;
 pub mod synth;
+pub mod voice;
 
 use bevy::audio::{AddAudioSource, DefaultSpatialScale, GlobalVolume, SpatialScale, Volume};
 use bevy::prelude::*;

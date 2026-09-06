@@ -1,14 +1,23 @@
-# Officer, I Can Explain
+# Boing! — Die Stadt der Flummis
 
-An original open-world crime sandbox, built in Rust with Bevy.
+An open-world sandbox about being rude to strangers, built in Rust with Bevy.
 
-An original work, not affiliated with anyone: the city, vehicles, pedestrians
-and police are all generated procedurally at runtime, and no trademarks or
-third-party IP are used. The sound is synthesised at startup from a seed. The
-surface materials are scanned PBR sets under CC0 — public domain — fetched by a
-script and never checked in.
+Everything here is made of rubber. You do not walk, you bounce; so does
+everybody else, and so do the cars. There are no weapons — the two mouse
+buttons blow a raspberry and whistle — and nobody can be hurt, because there is
+no health to take away. What there is instead is a mood. Every citizen carries
+one, wears it as a face, says it out loud, and catches it off the neighbours,
+and the whole game is what happens when you push a street's mood around and it
+pushes back.
 
-![The city from above](shots/m1-aerial.png)
+An original work, not affiliated with anyone: the city, the vehicles and the
+crowd are all generated procedurally at runtime, and no trademarks or
+third-party IP are used. Every sound is synthesised at startup from a seed,
+including the voices. Every face is painted per texel. The surface materials
+are scanned PBR sets under CC0 — public domain — fetched by a script and never
+checked in.
+
+![The city from above](shots/aerial.png)
 
 A 2 km² city — 676 blocks, 4046 buildings, 729 intersections — generated from a
 seed in 0.3 ms. Districts, parks and the street grid all fall out of the same
@@ -16,9 +25,14 @@ generator; nothing here is authored by hand.
 
 | | |
 |---|---|
-| ![Street level](shots/m1-street.png) | ![Night](shots/m1-night.png) |
-| ![Driving](shots/m3-driving.png) | ![Bodywork](shots/m3-cars.png) |
-| ![Rain](shots/m1-rain.png) | ![Dusk](shots/m1-dusk.png) |
+| ![A furious street](shots/rage.png) | ![A delighted one](shots/delight.png) |
+| ![Street level](shots/street.png) | ![Night](shots/night.png) |
+| ![Driving](shots/driving.png) | ![Bodywork](shots/cars.png) |
+| ![Rain](shots/rain.png) | ![Dusk](shots/dusk.png) |
+
+| | | |
+|---|---|---|
+| ![Furious](shots/face-angry.png) | ![Indifferent](shots/face-calm.png) | ![Delighted](shots/face-happy.png) |
 
 ## Running
 
@@ -42,48 +56,70 @@ just looks worse. Nothing is checked in and nothing is required to build.
 | **Shift** | Sprint |
 | **Space** | Jump on foot, handbrake in a car |
 | **F** | Enter / exit vehicle |
-| **Left mouse** | Fire |
-| **Right mouse** | Aim — raises the crosshair, which turns red on anything that can be hurt |
+| **Left mouse** | Taunt — a raspberry, and everybody in earshot takes it personally |
+| **Right mouse** | Cheer — a whistle, which does the opposite and carries further |
 | **M** | Full-screen map |
 | **F1** | Free-fly debug camera (hold right mouse to look) |
 | **F5 / F9** | Quick save / quick load |
+| **Escape** | Pause menu — save, load, settings, key bindings |
 
 Take your hand off the mouse and the camera swings itself in behind you — hard
-behind a car, gently on foot, and never while you are aiming or already
-steering the view yourself. Both rates are on the dev panel.
+behind a car, gently on foot, and never while you are already steering the view
+yourself. Both rates are on the dev panel.
+
+Every key above except WASD and the mouse can be rebound from the pause
+menu's "Tastenbelegung" screen, along with mouse sensitivity, a Y-invert
+toggle, audio and graphics. Settings persist to `saves/options.ron`; the
+world state from a save goes to `saves/quicksave.ron`, same as before.
 
 Gamepad is mapped throughout: left stick moves, right stick looks, A jumps,
-Y interacts, right trigger fires, left trigger aims, B is the handbrake.
+Y interacts, right trigger taunts, left trigger cheers, B is the handbrake.
+
+The menu and the HUD speak German. Everything a developer reads — the dev
+panel, the log, the code — is English.
 
 ## The loop
 
-Steal a car where somebody can see you and you pick up a wanted star. Police
-are dispatched to where the crime was reported and close in on the road
-network. **Heat only falls while no officer can see you** — escaping means
-breaking line of sight and keeping it broken for seven seconds, not waiting out
-a timer. Five stars puts eight cruisers on you, and above one star they stop
-following and start ramming — which on foot means being run over, thrown, and
-left on the tarmac for a second and a half.
+There isn't one, and that is deliberate: no objectives, no money, no fail
+state, nothing to lose. What there is is a city with a temper, and two buttons
+for provoking it.
+
+Blow a raspberry and everybody within about ten metres loses some of their
+mood, in proportion to how short their fuse is. Some of them let it go. One in
+ten is a Wutbürger who will not: he goes red, remembers who did it, and hops
+after you to ram you off your feet, which throws you into the road, which is a
+knock hard enough to sour the mood of whoever you land on. Whistle instead and
+the same thing runs backwards — a wider circle, a lift rather than a drop, and
+a delighted flummi will spin on the spot and go and bump into a neighbour,
+which cheers *them* up, because a gentle bop reads as a joke and a hard one
+reads as an insult.
+
+Both directions are the same three rules applied to everybody, so the crowd
+does this to itself whether or not you are watching. **The HUD shows your own
+mood and the city's**, and when enough citizens go red inside one second it
+says so.
+
+The rest is a city to bounce around: 857 parked cars to take, a road network
+with traffic on it, weather, and a day.
 
 ## Layout
 
 | Module | What lives there |
 |---|---|
-| `core` | States, schedule sets, tunables, deterministic RNG, screenshot tool |
+| `core` | States, schedule sets, tunables, persisted settings and key bindings, deterministic RNG, screenshot tool |
 | `world` | City generator, road graph, chunk streaming, day/night, weather, lights, facade shells and level of detail, window interiors, trees, street furniture, roofs, road wear, wet roads |
-| `player` | Input mapping, character controller, camera rig, enter/exit |
-| `vehicle` | Arcade vehicle physics, specs, damage, parked-car spawning |
-| `ai` | Traffic, pedestrians, police pursuit, shared steering, walk cycles |
-| `crime` | Crime kinds, witnesses, the wanted level |
-| `combat` | Health, armour, hitscan weapons, being run over |
-| `mission` | Objective state machine, mission chain, money |
-| `ui` | HUD, minimap, crosshair, dev tuning panel |
+| `bounce` | The elastic simulation: the hop controller, squash and stretch, the boing, being thrown |
+| `mood` | How a flummi feels, the face it wears, what it says, and what it does about it |
+| `player` | Input mapping, the character controller, camera rig, enter/exit |
+| `vehicle` | Arcade vehicle physics, specs, bodywork, damage, parked-car spawning |
+| `ai` | Traffic, pedestrians, shared steering, walk cycles, the figure itself |
+| `ui` | HUD, minimap, pause menu, dev tuning panel |
 | `save` | RON quick save / load |
 | `render` | Quality presets, atmosphere, exposure, bloom, shadows, ambient occlusion, anti-aliasing, volumetrics, grading, the post stack |
-| `audio` | Sound synthesis, the sound bank, and what triggers what |
+| `audio` | Sound synthesis, the voice synthesiser, the sound bank, and what triggers what |
 
 The world is fully reproducible from `GameConfig::world_seed`, so a save stores
-only what cannot be derived: position, money, health, heat and mission progress.
+only what cannot be derived: the seed, where the player is, and the hour.
 
 ## Quality
 
@@ -113,7 +149,7 @@ cargo run --features raytracing
 ## Development
 
 ```sh
-cargo test                                  # 279 tests
+cargo test                                  # 301 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
@@ -131,10 +167,23 @@ cargo run -- --screenshot shots/city.png --at 0,620,900 --look 0,20,-200 \
 cargo run -- --screenshot shots/street.png --at-node 300 --eye 1.7 --hour 21.5
 cargo run -- --screenshot shots/drive.png  --follow --drive --frames 2000
 cargo run -- --screenshot shots/map.png    --follow --map
+cargo run -- --screenshot shots/rage.png   --frames 240 --mood -1
 ```
 
+Sound has the same problem and now the same answer. A curse could only be heard
+by finding a flummi cross enough to say one, so:
+
+```sh
+cargo run -- --audition shots/audio       # the whole bank, one WAV each
+```
+
+writes every sound out and exits without starting Bevy at all — synthesis never
+needed an app. It enumerates the same two lists the bank's own tests iterate, so
+a sound that is not in one of them is neither auditable nor held to the rules.
+
 `tools/shoot.sh` renders the whole battery — aerial, street, dusk, night, rain,
-dawn, overcast, facade, park, bodywork, showroom, driving, map — so a rendering change can be
+dawn, overcast, facade, park, wear, bodywork, damage, showroom, driving, map,
+the three faces and the street in both moods — so a rendering change can be
 judged against the last one rather than against a memory of it. `--all-presets` shoots every
 tier into `shots/<preset>/`, and frame times are collected at the end, because
 a screenshot says a change looks right and says nothing about whether it can be
@@ -157,6 +206,7 @@ afforded.
 | `--stream-radius M` | Load more of the city than a player would |
 | `--frames N` | Frames to render before capturing |
 | `--quality Q` | Renderer tier: `low`, `medium`, `high`, `ultra`, `photo` |
+| `--mood F` | Hold every face in the city at this mood, −1 to 1 |
 | `--fps-log` | Log median, p95 and worst frame time alongside the shot |
 
 ## Textures
@@ -210,17 +260,198 @@ surface map already carries.
 ## People
 
 A pedestrian was a capsule, which reads as a person at fifty metres and as a
-bollard at five — and five metres is where pedestrians matter, because they are
-the witnesses, the victims and the crowd that scatters when a car mounts the
-kerb. They are now figures: torso, head, two arms, two legs, hung off the same
-entity the capsule collider is still on. Nothing about the physics or the
-line-of-sight checks changed.
+bollard at five — and five metres is where pedestrians matter, because the
+whole game is standing next to one and finding out what it thinks of you. They
+are now figures: torso, head, two arms, two legs, hung off the same entity the
+capsule collider is still on. Nothing about the physics changed.
 
 Limbs pivot at the joint rather than at their centre, which is why each is an
 entity at the shoulder or hip with its mesh hung below it — rotating a centred
 capsule swings it about its middle, and a leg that does that is not walking.
 The stride is paced by distance covered rather than by time, so running takes
 faster steps instead of longer ones. The player wears the same figure.
+
+Skin is not cloth. At roughness 0.88 — as matte as a wool coat — it takes no
+highlight at all, which was most of why a figure read as a mannequin, so
+anything bare is mixed at a half-gloss instead. Nobody here has a skin *tone*,
+though: a flummi's complexion is its mood, so the hands take the same colour
+the face does and go red with it. There is also a hair cap, and shoes on the
+ends of the legs. All of it is silhouette work — at the distance a pedestrian
+is actually seen, a head that ends in a shape and a sleeve that ends in
+something are worth more than anything happening on the surfaces. Every
+proportion is checked at compile time against the collider capsule, because a
+figure that pokes out of its own collider is one whose head can be looked
+straight through.
+
+## Bounce
+
+Restitution is a property of a *contact*, and that one sentence decided the
+shape of this whole module. The player used to move on a floating character
+controller — a spring holds the body a fixed distance above the ground, which
+solves kerbs and stairs and slopes for free — and a body held off the ground by
+a spring never touches anything. It could be declared as elastic as you liked
+and would still land like a sack. Cars have the same problem for the same
+reason: they ride on four raycast springs, so their box does not touch the road
+either.
+
+So the hop is applied by hand. A ray finds the ground, and at the bottom of
+each arc the vertical speed is *assigned* rather than added to — which is what
+stops the solver's own restitution and this system compounding into a body that
+climbs out of the world. Whatever the last bounce gave back, the next hop
+leaves at the same speed, so a flummi crossing a flat street keeps a steady
+rhythm and one thrown off a roof still lands like rubber.
+
+The ground probe deliberately reaches well past the soles. A bouncing body is
+airborne for most of its cycle, and a controller that only steers while
+strictly touching the ground gives you about three frames of control a second.
+Reaching down means the lower part of every arc counts as grounded, which is
+where the steering that matters happens anyway.
+
+What actually sells it is not the physics but the squash: flattened at the
+bottom of the arc, drawn out along the direction of travel on the way up and
+down, back to itself at the top. It is the oldest trick in animation and it is
+worth more here than any amount of solver tuning, because the bounce the eye
+believes is the one it can see the body preparing for. It cannot be applied to
+the body entity — Avian scales a collider by its transform, so a figure
+flattening at the bottom of a hop would flatten its own collider and sink
+through the pavement — so every part of a figure carries its rest pose and is
+scaled off that instead.
+
+Being hit by a car is an event rather than a collision. With a ton and a half
+arriving at 20 m/s against a capsule that is actively held upright, the solver
+loses: the capsule ends up *inside* the bodywork, where it is carried along by a
+car it cannot leave. So a car that connects throws you clear and takes the
+controller off you for a moment, so the throw lands instead of being braked
+away in two frames. Underneath that sits a net that pulls anybody out of a car
+they have somehow ended up inside, which makes the bug impossible rather than
+merely unlikely. Nobody is hurt; there is no health in this city. They are
+launched, and they bounce.
+
+## Faces
+
+Every head is an emoji, and none of them came from a font. A font would have
+been the only piece of third-party art in a project that paints its own bricks,
+and — worse — it can only hand back the moods somebody else drew. A mood here
+is a continuum and the face has to sit anywhere on it, including all the places
+between 😠 and 😐 where most of the comedy lives.
+
+So the face is a function of one number. The complexion goes red-hot at one end
+and bright yellow at the other; the brows tilt in and drop at the nose, or lift
+and bow; the eyes narrow to slits or open into round pupils or curl up into two
+arcs; the mouth is one lens shape whose curvature changes sign at exactly
+neutral, so an indifferent flummi gets a flat line. At the furious end there is
+a flush on the cheeks, a vein between the brows and a bead of sweat at the
+temple.
+
+Two things here were derived rather than guessed, and both are the kind of
+detail that would otherwise be tuned by eye forever. Bevy's UV sphere stands its
+poles on **±Z**, not ±Y — the stack angle drives the third component of each
+vertex — so left alone the pole singularity lands exactly where the face goes,
+since a figure faces its local −Z. The head mesh is turned a quarter turn about
+X, which stands the poles up where a head's poles belong and brings the
+equator's `u = 0.25` round to the front. And the painter bails early outside a
+box, so most of a sphere that is mostly not face costs one comparison; that is
+only safe because a test goes and measures how far the outermost feature
+actually reaches at every mood. A clipped brow would be a hard straight line
+nobody would catch by squinting at a head 13 cm across.
+
+Repainting a 256² texture whenever a mood moves would be a texture upload per
+flummi per frame, so the scale is quantised to thirteen levels, each with its
+own texture and material baked at startup — about 130 ms, and 4 MB. A figure
+whose level changes swaps a material handle and nothing else. The same thirteen
+moods are painted a second time flat and cut out, at 96², for the portrait in
+the corner of the HUD: cropping the head texture would mean blowing a 38-pixel
+window up to twice its size.
+
+## Voices
+
+The flummis talk, and what they say is nothing at all. Gibberish is a decision
+rather than a shortcut — a rising pair of syllables is a question and a falling
+growl is a complaint in any language, so the tone carries the whole message,
+and made-up words cannot be misheard as a real insult, which matters in a game
+whose entire subject is people being rude to each other.
+
+A voice is not a waveform. It is a buzz made in the throat, shaped by the
+mouth, and the two halves are independent: change the buzz and the same vowel
+comes out at a different pitch; change the shape and the same pitch comes out
+as a different vowel. That is exactly how it is built — a Rosenberg glottal
+pulse driven by a phase accumulator is the source, three band-passes in
+parallel are the filter, and a vowel is nothing but three frequencies handed to
+the second of them.
+
+The luck of it was that the kit was already here. `Resonator` was written to
+make sheet metal ring, and a band-pass that rings is what a vocal tract is: a
+vowel is three of them and a name. What had to be added were the three pieces
+that were genuinely missing, about fifteen lines each.
+
+Three things make it sound like a person, none of them optional. The pitch
+moves *within* a syllable, because a held pitch is a synthesiser. There is
+breath in it — a little noise through the same formants is the difference
+between a voice and an organ. And syllables start with something: a vowel that
+fades in from nothing is a theremin, while a burst of noise in front of it is a
+consonant and the ear hears a word.
+
+Out of that come a whistle, a giggle, a grumble, a curse, a raspberry and a
+gasp, several takes of each, pitched further apart again per speaker so that a
+citizen sounds like themselves every time.
+
+Deciding *who* speaks turned out to be the harder half, and the obvious limit
+is the wrong one. Capping the choir at the nearest few does nothing on its own:
+the ones outside it become eligible a frame later, the street cycles through in
+a tenth of a second, and the city ends up saying something ten times a second.
+A per-flummi rest stops one citizen hogging the conversation and does nothing
+about forty of them taking turns. So the city as a whole takes turns too, and
+the nearest-few cap becomes what it should have been from the start — a rule
+about who is worth hearing rather than about how often.
+
+## Tempers
+
+A mood is one number between −1 and +1. Two things move it: what happens to a
+flummi, and what is happening to the flummis around it. The second is the
+important one — a city where every citizen sulks privately is forty-five
+unrelated sulks, whereas one where a mood spreads is a crowd.
+
+The disposition doing the reacting is per citizen rather than global, which is
+what makes the same shove funny twice: it bounces off one flummi and starts a
+feud with the one standing next to it. Five of them, and the mix is weighted
+rather than uniform, because a city that is a fifth Wutbürger is one where the
+joke never lands — a shove has to bounce off somebody most of the time for it
+to be funny when it does not.
+
+| | Baseline | Fuse | Recovery | Contagion | Grudge | Share |
+|---|---|---|---|---|---|---|
+| **Serene** | +0.55 | 0.20 | 0.55 | 0.15 | 0.02 | 15% |
+| **Easygoing** | +0.30 | 0.40 | 0.40 | 0.30 | 0.10 | 25% |
+| **Ordinary** | +0.05 | 0.65 | 0.28 | 0.45 | 0.30 | 30% |
+| **Touchy** | −0.15 | 0.95 | 0.18 | 0.60 | 0.60 | 20% |
+| **Ragemonger** | −0.45 | 1.40 | 0.08 | 0.80 | 0.95 | 10% |
+
+The joke lives on one line. A knock below about six and a half metres a second
+of lost velocity is a friendly bop and cheers most people up; above it, it is an
+insult that lands in proportion to the fuse. And a fuse short enough turns even
+the bop sour — which is precisely what a Wutbürger is, and it falls out of the
+arithmetic rather than being a special case.
+
+Everything is drawn from its own RNG stream. Sharing the pedestrian one would
+have meant that retuning a fuse also moved where the next citizen spawned and
+which street they walked down, and the whole city is regenerated from its seed
+on demand, so that is not a cosmetic problem.
+
+Retaliation is the last rule. Somebody cross enough, with a long enough memory,
+picks the offender out of the street and hops after them to ram them off their
+feet — which launches the victim, sours their mood, and starts the next one. A
+provocation names its author, but a knock does not: it is spotted from a sudden
+change in velocity and has no idea what caused it. Rather than plumb a culprit
+through the physics, an aggrieved flummi blames *whoever is standing nearest*.
+That is wrong about half the time, which is the correct amount — being furious
+at the closest available person is what the temperament is for, and a Wutbürger
+who correctly blamed the wall would be a much duller neighbour.
+
+The happy half is the same collision with a different number on it. A delighted
+flummi pirouettes into its neighbour, the bump reads as a bop, and both moods
+go up. Two contagions running in opposite directions out of one contact, and
+the five dispositions are sliders on the dev panel so the balance between them
+can be found by pushing rather than by arguing.
 
 ## Roofs
 
@@ -636,6 +867,44 @@ ring points straddling the belt are pinned to it, which turns the step into a
 right angle no amount of tessellation can soften, and `split_creases` then
 duplicates the vertices along it so smoothing stops averaging across the fold.
 
+A greenhouse is glazed by cutting its own frame out of itself. The cabin is
+lofted once as a glass tube, and the pressings — the roof, the A, B and C
+pillars, the cowl sides, the rear quarters — are patches sampled off that same
+loft and lifted six millimetres clear of it. There is no separate pillar shape
+to model and nothing to keep in step: which part of the surface is steel and
+which is glass falls out of the two loft coordinates, so a pillar always agrees
+with the rake above it, and retuning a cabin moves both at once. What is left
+uncut is the daylight opening, and the table is written so the roof's ends are
+exactly where the pillars stop — the screen and the backlight are the gaps.
+
+Behind the glass there is a car. The same cabin loft is built a second time at
+ninety-eight and a half percent scale with its triangles wound inside out, which
+leaves backface culling showing the *far* wall of the interior, lit as though it
+faced you. Doing that in geometry rather than with a front-face cull is not a
+preference: a two-sided material does not survive the deferred path. Inside it
+are seats, head restraints and a wheel, all sized as fractions of the cabin's
+own headroom rather than in metres — written in metres they stood above the
+roofline of anything with a low roof and read as roll hoops on a convertible.
+Everything in there is very dark, for the same reason the rooms behind the
+windows are: the fragment is shaded by the same sun as the roof over it, so the
+number has to stand for the trim's albedo *and* for how little daylight gets in.
+
+Everything bolted to a car is measured off its own profile rather than off the
+collider box — lamps, bumpers, grille, mirrors, tailpipe, plates. A mount typed
+in by hand drifts from lofted bodywork silently, and the failure looks like a
+styling decision until somebody measures it: the mirrors were buried in the
+doors because they were mounted on the cabin's cross-section, which is a fifth
+of a metre narrower than the flank they belong on. Each mount is a station on a
+section at a stated fraction of its height, and the tests ask what would
+otherwise go unnoticed — that a lamp is set into the nose rather than bolted
+beside it, that the grille stops at the lamps' inner edges and not their
+centres, that nothing inside pokes out through the roof.
+
+Number plates are drawn: a 5×7 font, eight invented registrations, one material
+each shared city-wide, and which one a car wears hashed from where it spawned so
+it survives the chunk streaming out and back and no two cars parked nose to tail
+match.
+
 Wheels are surfaces of revolution with the tread and the spokes painted on and
 normal-mapped rather than modelled — geometry that fine is a blur above walking
 pace.
@@ -645,27 +914,56 @@ the occasional colour, because an evenly sampled rainbow reads as a toy box and
 it is the proportion of dull cars that makes the red one feel deliberate. Each
 colour carries its own flake content, and it goes on under a clearcoat.
 
+The flake itself is a normal map, tiled down to hand scale because the loft's
+UVs run nought to one over a whole car. Two frequencies: a facet every few
+texels for the aluminium suspended in the basecoat, and a much broader, much
+shallower undulation for the lacquer over it failing to settle flat. Neither
+of them is `anisotropy_strength`, which is what this was going to be — see the
+limitations.
+
 Crashes beat the metal in. The first real impact copies that car's panels off
 the archetype's shared mesh — everything else keeps batching — and pushes a
 dent into them along the direction the blow arrived from. The lacquer dulls, the
 flake stops reading, and past about a third gone the colour cooks off towards
-soot; below thirty percent it smokes.
+soot; below thirty percent it smokes. Damage recomputes the paint from the spec
+rather than nudging what is there, because a material edited in place drifts and
+a repaired car would stay dull — and it goes through the same function that
+paints a new one, since two copies of a formula agree only until somebody edits
+one.
+
+Headlights are real spot lights, given to cars with someone at the wheel and
+taken back at dawn; parked cars are excluded, because several hundred of them
+would be several hundred spot lights lighting the inside of their own bumpers.
+Above the fog-and-lights tier a beam is volumetric, which is what turns a lit
+patch of road into a pair of cones coming at you through the drizzle. The
+component goes on at the moment the beam is spawned rather than being attached
+by `render::volumetrics` — a beam is born at dusk and dies at dawn, and that
+system attaches its lights once and then sleeps on a change detector.
 
 ## Audio
 
 There are no sound files either. `audio::synth` is a small DSP kit — partials,
-noise, one-pole filters, resonators, envelopes — and `audio::bank` writes every
-sound in the game as an expression in it: a gunshot is a crack plus a muzzle
-blast plus the street answering back. The buffers are computed once at startup
-and played through a custom Bevy audio source.
+noise, one-pole filters, resonators, envelopes, a phase accumulator — and
+`audio::bank` writes every sound in the game as an expression in it: a crash is
+four inharmonic resonators struck by a burst of noise, and each of those is a
+named term in a sum. The buffers are computed once at startup, in nine
+milliseconds, and played through a custom Bevy audio source.
+
+The signature sound is the boing, and it is a sweep rather than a note: the
+spring is stiffest at the moment of contact and slackens as it unloads, so the
+frequency falls steeply and then flattens. Phase is accumulated rather than
+computed from `sin(2πft)`, because with a frequency that changes every sample
+the latter is not a sweep at all — it is a series of unrelated tones, and it
+clicks at every one of them.
 
 Loops are built to be seamless by construction rather than by crossfading: the
 engine and the ambience are sums of harmonics of the loop frequency, so the
-waveform is exactly periodic, and the siren's sweep is tuned so its accumulated
-phase closes at the loop point.
+waveform is exactly periodic. Filtered noise can never be periodic on the
+cheap, so tyre and intake hiss is generated long and folded back over its own
+head instead, which makes the join an ordinary step rather than a click.
 
-Engine pitch follows the drivetrain, sirens and beacons come on with the
-pursuit, and everything but the player's own car is positioned in the world.
+Engine pitch follows the drivetrain, and everything but the player's own car is
+positioned in the world.
 
 ## Known limitations
 
@@ -692,11 +990,13 @@ pursuit, and everything but the player's own car is positioned in the world.
   perspective and the distance fog instead, which is a different model with a
   different look; the seam is soft, but it is there.
 
-- The 60 fps at 1440p budget is unverified. Everything in `shots/` was rendered
-  on a software rasteriser, where a frame takes seconds and the frame times say
-  nothing whatever about a GPU. The geometry here was sized against a resolution
-  argument — a reveal is under a pixel past five hundred metres — rather than
-  against a measurement. The measurement is still owed.
+- The 60 fps at 1440p budget is still unverified, though it is no longer
+  unmeasured. The battery now renders on a real GPU — an Apple M4 Pro, through
+  Metal — at 1600×900, where the quiet framings sit at 17–19 ms and the busy
+  ones (driving, a street full of provoking flummis) at 28–29 ms. That is the
+  right side of the line at this resolution and says nothing yet about 1440p or
+  about a discrete card, and the geometry was still sized against a resolution
+  argument rather than against a measurement.
 
 - Meshlets are not built. GPU cluster culling is the right technique for the
   LOD0 shells and it is what a modern engine would carry this geometry with; it
@@ -713,6 +1013,12 @@ pursuit, and everything but the player's own car is positioned in the world.
   is wide has reveals twice as deep on its short faces. Lots are subdivided by
   always splitting the longer side, so the error stays under a factor of two.
 
+- A figure's hairline is low. The cap is a flattened sphere over the head and
+  it cannot rise much further without leaving the collider capsule, so it
+  covers more of the forehead than hair generally does. What it buys is the
+  dark top to the silhouette, which is the part that reads at the distance a
+  pedestrian is seen from; where exactly the hairline sits does not.
+
 - Trees lean, they do not flutter. A rigid rotation about the foot is honest for
   a swaying trunk and says nothing at all about leaves, and above a gale the
   model stops rather than pretending — a tree thrashing in a storm is not
@@ -727,15 +1033,66 @@ pursuit, and everything but the player's own car is positioned in the world.
   nothing else. Furniture would need a second box test per fragment and a reason
   to believe anybody would look.
 
+- Metallic flake is not `anisotropy_strength`, and orange peel is not a
+  `clearcoat_normal_texture`. Both were the plan and both were measured out:
+  the deferred g-buffer carries base colour and roughness, emissive,
+  reflectance, metallic, occlusion, and clearcoat strength and roughness at
+  four bits each, plus exactly one octahedral normal. There is nowhere for a
+  second normal or a tangent direction to go, so those two fields are dropped
+  between the prepass and the lighting pass without a word. Anisotropy was the
+  wrong model anyway — it stretches the specular lobe along the tangent, which
+  is brushed metal and hair, where flake is isotropic. One normal map carries
+  both effects instead, which is the form that survives.
+
+- Car glass does not refract. `specular_transmission` was the plan and it was
+  measured out too: through a five-millimetre pane at a windscreen's rake, the
+  ray behind it is displaced by under two millimetres, which is sub-pixel at
+  any distance a car is ever seen from — for the cost of a transmissive pass
+  with its own copy of the screen. What reads as glass is a Fresnel edge and a
+  cabin behind it, and both of those are cheap.
+
+- A van's glazing is opaque. It lies *on* the front of the box rather than in a
+  hole through it, because a van has no greenhouse of its own to loft, so there
+  is no cab behind it to see — only the outside of the bodywork it is lying on.
+  It is also duller than a car's: at a windscreen's own roughness, an opaque
+  pane on a nose raked that hard is a mirror pointed at the sky and comes back
+  indistinguishable from paint.
+
+- Every car in the city shares eight registrations. One plate is one texture
+  and one material, and a plate per car would be a material per car in a place
+  that has several hundred of them parked. Eight is enough that a street does
+  not obviously repeat and not enough to survive being looked for.
+
 - Screen-space reflections can only reflect what is on screen. A car just out of
   frame stops appearing in the road under it. Light probes do not have that
   problem and cannot reflect anything that moves; the two are complementary and
   only one of them is built.
 
+- The mood is not saved. A save stores the seed, where you are and the hour,
+  because everything else is derived from the seed — and a city's temper is
+  not, so loading drops you into a street that has forgotten what you did to
+  it. Storing forty-five moods is easy; storing them against citizens who are
+  respawned by proximity rather than by identity is not.
+
+- The anger vein and the bead of sweat barely read in play. Both are painted
+  and both are there, but on a sphere anything more than about 0.6 face units
+  out is 70° off the axis — the limb of the head, edge-on and in shadow. They
+  show on the HUD portrait, which is flat, and are close to invisible on a head
+  13 cm across.
+
+- A busy street is quieter than the number of flummis on it. Only the nearest
+  few are eligible to speak and the city takes turns on top of that, so what
+  you hear is one voice at a time however many citizens are visibly cross.
+  Without both limits it is a wall of noise with no individual in it; with
+  them, a riot sounds like a disagreement.
+
+- The crowd never spawns within 25 m of you, so a taunt on an empty street is
+  a raspberry into the wind until somebody walks in. The ring shows, which is
+  the only reason it does not read as a broken button.
+
 - Pedestrians cross roads wherever their route turns, rather than at crossings.
 - Traffic has no right-of-way rules at junctions; it brakes for obstacles only —
   the signals above are the visible half of a rule that is not implemented.
-- Vehicle damage is not visually modelled — cars are wrecked, not deformed.
 - Facades are procedural, so walls read as materials rather than photographs.
   Scanning them needs a custom material with a detail UV; see above.
 - Six wall sets across five districts, so a long enough walk repeats. What

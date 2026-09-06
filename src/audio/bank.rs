@@ -1,10 +1,10 @@
 //! Every sound the game can make, computed at startup.
 //!
 //! These are written the way a synthesist would describe them rather than the
-//! way a sampler would: a gunshot is a crack plus a muzzle blast plus the
-//! street answering back, and each of those is a named term in a sum. That is
-//! deliberate — the parameters that matter are then editable, and a shot that
-//! sounds wrong is a number to change rather than a recording to re-take.
+//! way a sampler would: a crash is four inharmonic resonators struck by a burst
+//! of noise, and each of those is a named term in a sum. That is deliberate —
+//! the parameters that matter are then editable, and a sound that comes out
+//! wrong is a number to change rather than a recording to re-take.
 //!
 //! Everything is normalised to a stated peak at the end, so relative loudness
 //! across the bank is decided in one place instead of falling out of whatever
@@ -20,25 +20,38 @@ use super::synth::{
     LowPass, Partial, Resonator, SAMPLE_RATE, SynthSound, at, fade_edges, harmonics, hit,
     normalize, samples, white, wrap_seam,
 };
+use super::voice::{self, Onset, Syllable};
 use crate::core::rng::{stream, stream_for};
 
 /// Every sound, loaded once and shared by everything that plays it.
 #[derive(Resource)]
 pub struct SoundBank {
-    pub pistol: Handle<SynthSound>,
-    pub smg: Handle<SynthSound>,
+    pub boing: Handle<SynthSound>,
     pub explosion: Handle<SynthSound>,
     pub crash: Handle<SynthSound>,
-    pub thud: Handle<SynthSound>,
     pub footstep: Handle<SynthSound>,
     pub car_door: Handle<SynthSound>,
     pub engine: Handle<SynthSound>,
-    pub siren: Handle<SynthSound>,
     pub screech: Handle<SynthSound>,
     pub ambience: Handle<SynthSound>,
-    pub star: Handle<SynthSound>,
-    pub chime: Handle<SynthSound>,
+
+    // --- voices ---
+    //
+    // Several of each where one would be recognised as a repeat. A flummi
+    // saying the same four syllables every time it is annoyed stops being a
+    // citizen and becomes a doorbell, and playback pitches these further apart
+    // again per speaker. The ones that are single are single because they are
+    // short enough that nobody hears them as a phrase.
+    pub whistle: [Handle<SynthSound>; VARIANTS],
+    pub giggle: Handle<SynthSound>,
+    pub grumble: [Handle<SynthSound>; VARIANTS],
+    pub curse: [Handle<SynthSound>; VARIANTS],
+    pub raspberry: Handle<SynthSound>,
+    pub gasp: Handle<SynthSound>,
 }
+
+/// How many takes of each spoken sound the bank holds.
+pub const VARIANTS: usize = 3;
 
 /// Firing frequency, in hertz, that the engine loop plays at unit speed.
 /// Everything driving it scales from here.
@@ -46,33 +59,21 @@ pub const ENGINE_REFERENCE_HZ: f32 = 40.0;
 
 pub fn build(sounds: &mut Assets<SynthSound>) -> SoundBank {
     SoundBank {
-        pistol: sounds.add(shot(Shot {
-            seed: 1,
-            length: 0.42,
-            crack: 0.028,
-            brightness: 1_500.0,
-            thump: 240.0,
-            tail: 0.16,
-        })),
-        smg: sounds.add(shot(Shot {
-            seed: 2,
-            length: 0.26,
-            crack: 0.016,
-            brightness: 2_300.0,
-            thump: 300.0,
-            tail: 0.09,
-        })),
+        boing: sounds.add(boing()),
         explosion: sounds.add(explosion()),
         crash: sounds.add(crash()),
-        thud: sounds.add(thud()),
         footstep: sounds.add(footstep()),
         car_door: sounds.add(car_door()),
         engine: sounds.add(engine_loop()),
-        siren: sounds.add(siren_loop()),
         screech: sounds.add(screech_loop()),
         ambience: sounds.add(ambience_loop()),
-        star: sounds.add(star_sting()),
-        chime: sounds.add(mission_chime()),
+
+        whistle: std::array::from_fn(|take| sounds.add(whistle(take))),
+        giggle: sounds.add(giggle()),
+        grumble: std::array::from_fn(|take| sounds.add(grumble(take))),
+        curse: std::array::from_fn(|take| sounds.add(curse(take))),
+        raspberry: sounds.add(raspberry()),
+        gasp: sounds.add(gasp()),
     }
 }
 
@@ -80,59 +81,42 @@ fn audio_stream(seed: u64) -> ChaCha8Rng {
     stream_for(seed, stream::AUDIO)
 }
 
+/// Every one-shot in the bank, by name.
+///
+/// Built rather than listed at each use, because there are three places that
+/// want the whole bank — the two tests that hold it to its rules, and the
+/// audition tool — and a hand-kept list in each of them means a new sound is
+/// exempt from the rules until somebody notices.
+pub fn every_one_shot() -> Vec<(String, SynthSound)> {
+    let mut all = vec![
+        ("boing".to_string(), boing()),
+        ("explosion".to_string(), explosion()),
+        ("crash".to_string(), crash()),
+        ("footstep".to_string(), footstep()),
+        ("car-door".to_string(), car_door()),
+        ("giggle".to_string(), giggle()),
+        ("raspberry".to_string(), raspberry()),
+        ("gasp".to_string(), gasp()),
+    ];
+    for take in 0..VARIANTS {
+        all.push((format!("whistle-{take}"), whistle(take)));
+        all.push((format!("grumble-{take}"), grumble(take)));
+        all.push((format!("curse-{take}"), curse(take)));
+    }
+    all
+}
+
+/// And every loop.
+pub fn every_loop() -> Vec<(String, SynthSound)> {
+    vec![
+        ("engine".to_string(), engine_loop()),
+        ("screech".to_string(), screech_loop()),
+        ("ambience".to_string(), ambience_loop()),
+    ]
+}
+
 // ------------------------------------------------------------- one-shots ----
 
-struct Shot {
-    seed: u64,
-    length: f32,
-    /// Half-life of the initial crack.
-    crack: f32,
-    /// Where the crack sits in the spectrum, in hertz.
-    brightness: f32,
-    /// Starting frequency of the muzzle blast.
-    thump: f32,
-    /// Half-life of the reflected tail.
-    tail: f32,
-}
-
-/// A gunshot is three events, not one.
-///
-/// The crack is broadband noise gone in a few milliseconds. The thump is a fast
-/// downward sweep — the muzzle blast, and the whole reason a shot has weight.
-/// The tail is the same noise pulled through a low-pass and held; without it a
-/// shot sounds like it was fired in a padded room rather than in a street.
-fn shot(voice: Shot) -> SynthSound {
-    let mut rng = audio_stream(voice.seed);
-    let mut band = Resonator::new(voice.brightness, voice.brightness * 0.85);
-    let mut reflections = LowPass::new(1_100.0);
-    let mut phase = 0.0f32;
-
-    let mut out = Vec::with_capacity(samples(voice.length));
-    for index in 0..samples(voice.length) {
-        let t = at(index);
-        let noise = white(&mut rng);
-
-        let crack = band.process(noise) * hit(t, 0.0004, voice.crack);
-        let tail = reflections.process(noise) * hit(t, 0.006, voice.tail) * 0.55;
-
-        // Blast pitch falls by two thirds over the first 60ms.
-        let blast_hz = voice.thump * (1.0 - 0.68 * (t / 0.06).min(1.0));
-        phase += TAU * blast_hz / SAMPLE_RATE as f32;
-        let thump = phase.sin() * hit(t, 0.0008, 0.042);
-
-        out.push(crack * 0.85 + tail + thump * 0.95);
-    }
-
-    fade_edges(&mut out, 0.002);
-    normalize(&mut out, 0.92);
-    SynthSound::new(out)
-}
-
-/// A car going up: blast, rumble, sub, and burning debris.
-///
-/// The low-pass cutoff falls as the sound plays, which is the part that reads
-/// as distance and size — a fireball loses its high end long before it loses
-/// its energy.
 fn explosion() -> SynthSound {
     let mut rng = audio_stream(3);
     let mut blast = LowPass::new(1_500.0);
@@ -201,24 +185,40 @@ fn crash() -> SynthSound {
     SynthSound::new(out)
 }
 
-/// Something soft hitting the pavement.
-fn thud() -> SynthSound {
-    let mut rng = audio_stream(5);
-    let mut body = LowPass::new(240.0);
-    let mut scuff = LowPass::new(1_800.0);
+/// The signature sound of the city: something elastic giving way and coming
+/// back.
+///
+/// A boing is a pitch sweep, not a note. The spring is stiffest at the moment
+/// of contact and slackens as it unloads, so the frequency falls steeply and
+/// then flattens out — an exponential decay towards a floor, which is what the
+/// two terms are. The warble on top is the wobble of a body that has not quite
+/// finished deciding what shape it is.
+///
+/// Phase is accumulated rather than computed from `sin(TAU * f * t)`, because
+/// with a frequency that changes every sample the latter is not a sweep at all:
+/// it is a series of unrelated tones, and it clicks at every one of them.
+fn boing() -> SynthSound {
+    let length = samples(0.34);
+    let mut phase: f64 = 0.0;
+    let mut out = Vec::with_capacity(length);
 
-    let mut out = Vec::with_capacity(samples(0.3));
-    for index in 0..samples(0.3) {
+    for index in 0..length {
         let t = at(index);
-        let noise = white(&mut rng);
-        out.push(
-            body.process(noise) * hit(t, 0.004, 0.055) * 2.0
-                + scuff.process(noise) * hit(t, 0.001, 0.018) * 0.35,
-        );
+        // 640 Hz down towards 95 Hz, most of the fall inside the first 80 ms.
+        let sweep = 95.0 + 545.0 * (-t * 11.0).exp();
+        let warble = 1.0 + 0.11 * (TAU * 26.0 * t).sin();
+        let hz = sweep * warble;
+
+        phase += TAU as f64 * hz as f64 / SAMPLE_RATE as f64;
+        if phase > TAU as f64 {
+            phase -= TAU as f64;
+        }
+        let wave = phase.sin() as f32 + (phase * 2.0).sin() as f32 * 0.22;
+        out.push(wave * hit(t, 0.003, 0.085));
     }
 
-    fade_edges(&mut out, 0.003);
-    normalize(&mut out, 0.7);
+    fade_edges(&mut out, 0.004);
+    normalize(&mut out, 0.85);
     SynthSound::new(out)
 }
 
@@ -263,6 +263,127 @@ fn car_door() -> SynthSound {
 
     fade_edges(&mut out, 0.003);
     normalize(&mut out, 0.75);
+    SynthSound::new(out)
+}
+
+// ---------------------------------------------------------------- voices ----
+//
+// Everything below is gibberish on purpose — see `super::voice`. What carries
+// the mood is the shape of the phrase and not the syllables in it: a giggle is
+// short syllables climbing, a grumble is long ones falling, and a curse is a
+// plosive followed by two hard hits. Written that way, the mood is a contour
+// somebody can argue with rather than a sample somebody has to re-record.
+
+/// Base pitch of a flummi's speaking voice, in hertz. Playback moves each
+/// citizen away from this again, so it is only the middle of the crowd.
+const SPEAKING_HZ: f32 = 168.0;
+
+/// A cheerful tune, whistled. Six notes wandering about a major triad, so it
+/// reads as somebody idly pleased rather than as a signal.
+fn whistle(take: usize) -> SynthSound {
+    let mut rng = audio_stream(11 + take as u64);
+    let root = voice::step(880.0, take as f32 * 2.0);
+    let tunes = [
+        [0.0, 4.0, 7.0, 4.0, 9.0, 7.0],
+        [0.0, 7.0, 5.0, 9.0, 12.0, 7.0],
+        [0.0, 2.0, 4.0, 9.0, 7.0, 12.0],
+    ];
+    let notes: Vec<f32> = tunes[take % tunes.len()]
+        .iter()
+        .map(|semitones| voice::step(root, *semitones))
+        .collect();
+
+    let mut out = voice::whistle(&mut rng, &notes, 1.15);
+    fade_edges(&mut out, 0.012);
+    normalize(&mut out, 0.55);
+    SynthSound::new(out)
+}
+
+/// Four short syllables climbing. The rise is the laugh — the same syllables
+/// falling are a sob, which is a different game entirely.
+fn giggle() -> SynthSound {
+    let mut rng = audio_stream(14);
+    let base = SPEAKING_HZ * 1.35;
+    let syllables: Vec<Syllable> = (0..4)
+        .map(|index| {
+            let hz = voice::step(base, index as f32 * 1.8);
+            Syllable::new(voice::EE, hz, 0.075)
+                .onset(Onset::Fricative)
+                .bend(1.18)
+                .gain(1.0 - index as f32 * 0.12)
+        })
+        .collect();
+
+    let mut out = voice::utter(&mut rng, &syllables);
+    fade_edges(&mut out, 0.006);
+    normalize(&mut out, 0.6);
+    SynthSound::new(out)
+}
+
+/// Muttering: low, dark vowels on a falling contour, with the top taken off it.
+///
+/// The low-pass is what makes it muttering rather than speech. A grumble is
+/// something said into a collar, and the ear reads a missing top end as
+/// somebody not meaning you to catch it.
+fn grumble(take: usize) -> SynthSound {
+    let mut rng = audio_stream(17 + take as u64);
+    let base = SPEAKING_HZ * (0.62 + take as f32 * 0.05);
+    let syllables: Vec<Syllable> = (0..3)
+        .map(|index| {
+            let hz = voice::step(base, -(index as f32) * 1.5);
+            Syllable::new(voice::dark_vowel(&mut rng), hz, 0.17 + index as f32 * 0.02).bend(0.88)
+        })
+        .collect();
+
+    let mut out = voice::utter(&mut rng, &syllables);
+    let mut collar = LowPass::new(1_400.0);
+    for sample in &mut out {
+        *sample = collar.process(*sample);
+    }
+    fade_edges(&mut out, 0.008);
+    normalize(&mut out, 0.6);
+    SynthSound::new(out)
+}
+
+/// Swearing: a plosive and two hard syllables, bitten off at the end.
+///
+/// The plosive is doing nearly all the work. Without it this is shouting; with
+/// it the ear supplies a consonant and hears a word it cannot quite make out,
+/// which is funnier and, conveniently, cannot be quoted back at anybody.
+fn curse(take: usize) -> SynthSound {
+    let mut rng = audio_stream(21 + take as u64);
+    let base = SPEAKING_HZ * (1.10 + take as f32 * 0.08);
+    let syllables = [
+        Syllable::new(voice::AH, base, 0.13)
+            .onset(Onset::Plosive)
+            .bend(0.82),
+        Syllable::new(voice::any_vowel(&mut rng), voice::step(base, -3.0), 0.10)
+            .onset(Onset::Plosive)
+            .bend(0.72)
+            .gain(0.85),
+    ];
+
+    let mut out = voice::utter(&mut rng, &syllables);
+    fade_edges(&mut out, 0.005);
+    normalize(&mut out, 0.8);
+    SynthSound::new(out)
+}
+
+/// The provocation. Nothing in the game is ruder and nothing is cheaper.
+fn raspberry() -> SynthSound {
+    let mut rng = audio_stream(25);
+    let mut out = voice::raspberry(&mut rng, 0.55, 35.0);
+    fade_edges(&mut out, 0.008);
+    normalize(&mut out, 0.85);
+    SynthSound::new(out)
+}
+
+/// Somebody seeing it coming.
+fn gasp() -> SynthSound {
+    let mut rng = audio_stream(26);
+    let mut out = voice::gasp(&mut rng, 0.30);
+    fade_edges(&mut out, 0.004);
+    normalize(&mut out, 0.5);
     SynthSound::new(out)
 }
 
@@ -326,51 +447,6 @@ fn engine_loop() -> SynthSound {
     SynthSound::new(buffer)
 }
 
-const SIREN_SECONDS: f32 = 1.6;
-/// Whole cycles of the fundamental in one wail.
-///
-/// It has to be a whole number. The siren's pitch is swept continuously, so the
-/// only thing that puts the waveform back where it started at the end of the
-/// loop is the total accumulated phase coming out an exact multiple of a turn —
-/// and since the sweep itself averages out over a full wail, that total is just
-/// the mean frequency times the duration.
-const SIREN_CYCLES: f32 = 1_760.0;
-
-/// A two-tone wail.
-fn siren_loop() -> SynthSound {
-    let length = samples(SIREN_SECONDS);
-    let mean_hz = SIREN_CYCLES / SIREN_SECONDS;
-    let depth_hz = 380.0;
-
-    // Accumulated in f64 and wrapped every turn. Neither is fussiness: a swept
-    // tone needs seventy thousand additions to get round the loop, and in f32
-    // the rounding error alone drifts the closing phase by a tenth of a radian
-    // — which is audible, once every wail, as a tick.
-    let mut phase = 0.0f64;
-    let tau = std::f64::consts::TAU;
-
-    let mut out = Vec::with_capacity(length);
-    for index in 0..length {
-        // Exactly one sweep per loop, so the modulation closes too.
-        let turn = index as f32 / length as f32;
-        let hz = mean_hz + depth_hz * (TAU * turn).sin();
-
-        // A horn is not a sine. Two harmonics above the fundamental are enough
-        // to make it cut through an engine.
-        let voice = phase.sin() * 0.70 + (phase * 2.0).sin() * 0.26 + (phase * 3.0).sin() * 0.12;
-        // Slight swell towards the top of the sweep.
-        out.push(voice as f32 * (0.82 + 0.18 * (TAU * turn).sin()));
-
-        phase += tau * hz as f64 / SAMPLE_RATE as f64;
-        if phase >= tau {
-            phase -= tau;
-        }
-    }
-
-    normalize(&mut out, 0.8);
-    SynthSound::new(out)
-}
-
 /// Tyres letting go: narrow-band noise with a warble in it.
 fn screech_loop() -> SynthSound {
     let mut rng = audio_stream(9);
@@ -413,47 +489,6 @@ fn ambience_loop() -> SynthSound {
     SynthSound::new(buffer)
 }
 
-// --------------------------------------------------------------- stingers ----
-
-/// One plucked note in a stinger.
-fn note(t: f32, start: f32, hz: f32, half_life: f32) -> f32 {
-    let local = t - start;
-    if local < 0.0 {
-        return 0.0;
-    }
-    let phase = TAU * hz * local;
-    // A little of the octave and the twelfth, so it reads as an instrument
-    // rather than a test tone.
-    (phase.sin() + (phase * 2.0).sin() * 0.35 + (phase * 3.0).sin() * 0.14)
-        * hit(local, 0.004, half_life)
-}
-
-/// Heard when the wanted level goes up: two notes, rising, urgent.
-fn star_sting() -> SynthSound {
-    let mut out = Vec::with_capacity(samples(0.6));
-    for index in 0..samples(0.6) {
-        let t = at(index);
-        out.push(note(t, 0.0, 587.33, 0.10) + note(t, 0.13, 880.0, 0.22));
-    }
-    fade_edges(&mut out, 0.004);
-    normalize(&mut out, 0.55);
-    SynthSound::new(out)
-}
-
-/// Heard on finishing a job: a major triad, arpeggiated.
-fn mission_chime() -> SynthSound {
-    let mut out = Vec::with_capacity(samples(1.0));
-    for index in 0..samples(1.0) {
-        let t = at(index);
-        out.push(
-            note(t, 0.0, 523.25, 0.30) + note(t, 0.11, 659.25, 0.30) + note(t, 0.22, 783.99, 0.45),
-        );
-    }
-    fade_edges(&mut out, 0.004);
-    normalize(&mut out, 0.5);
-    SynthSound::new(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,12 +507,7 @@ mod tests {
         // A discontinuity at the loop point is a click, once per repeat, for as
         // long as the sound plays. It is the single most audible thing that can
         // go wrong here, so it gets its own test.
-        for (name, sound) in [
-            ("engine", engine_loop()),
-            ("siren", siren_loop()),
-            ("screech", screech_loop()),
-            ("ambience", ambience_loop()),
-        ] {
+        for (name, sound) in every_loop() {
             let buffer: Vec<f32> = sound.decoder().collect();
             let (inside, seam) = steps(&buffer);
             assert!(
@@ -489,23 +519,7 @@ mod tests {
 
     #[test]
     fn one_shots_start_and_end_in_silence() {
-        for (name, sound) in [
-            (
-                "pistol",
-                shot(Shot {
-                    seed: 1,
-                    length: 0.42,
-                    crack: 0.028,
-                    brightness: 1_500.0,
-                    thump: 240.0,
-                    tail: 0.16,
-                }),
-            ),
-            ("explosion", explosion()),
-            ("crash", crash()),
-            ("footstep", footstep()),
-            ("chime", mission_chime()),
-        ] {
+        for (name, sound) in every_one_shot() {
             let buffer: Vec<f32> = sound.decoder().collect();
             assert_eq!(buffer[0], 0.0, "{name} starts mid-waveform");
             assert!(
@@ -517,25 +531,9 @@ mod tests {
 
     #[test]
     fn nothing_in_the_bank_clips() {
-        for (name, sound) in [
-            (
-                "pistol",
-                shot(Shot {
-                    seed: 1,
-                    length: 0.42,
-                    crack: 0.028,
-                    brightness: 1_500.0,
-                    thump: 240.0,
-                    tail: 0.16,
-                }),
-            ),
-            ("explosion", explosion()),
-            ("crash", crash()),
-            ("engine", engine_loop()),
-            ("siren", siren_loop()),
-            ("ambience", ambience_loop()),
-            ("star", star_sting()),
-        ] {
+        let mut all = every_one_shot();
+        all.extend(every_loop());
+        for (name, sound) in all {
             let peak = sound
                 .decoder()
                 .fold(0.0f32, |m: f32, s: f32| m.max(s.abs()));
@@ -545,26 +543,23 @@ mod tests {
     }
 
     #[test]
-    fn a_gunshot_is_over_before_the_weapon_can_fire_again() {
-        // The SMG fires every 85ms. Its report has to be shorter than a pistol's
-        // or automatic fire turns into one continuous roar.
-        let smg = shot(Shot {
-            seed: 2,
-            length: 0.26,
-            crack: 0.016,
-            brightness: 2_300.0,
-            thump: 300.0,
-            tail: 0.09,
-        });
-        let pistol = shot(Shot {
-            seed: 1,
-            length: 0.42,
-            crack: 0.028,
-            brightness: 1_500.0,
-            thump: 240.0,
-            tail: 0.16,
-        });
-        assert!(smg.duration() < pistol.duration());
+    fn a_boing_falls_in_pitch_rather_than_holding_a_note() {
+        // Counted as zero crossings in the first and last thirds. A boing that
+        // holds its pitch is a beep, and the whole city would be beeping.
+        let buffer: Vec<f32> = boing().decoder().collect();
+        let third = buffer.len() / 3;
+        let crossings = |window: &[f32]| {
+            window
+                .windows(2)
+                .filter(|w| w[0].signum() != w[1].signum())
+                .count()
+        };
+        let early = crossings(&buffer[..third]);
+        let late = crossings(&buffer[third * 2..]);
+        assert!(
+            early > late * 2,
+            "{early} crossings early against {late} late is not a sweep"
+        );
     }
 
     #[test]

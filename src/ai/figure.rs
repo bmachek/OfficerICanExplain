@@ -14,10 +14,18 @@
 //! is an entity at the shoulder or hip with the mesh hung *below* it. Rotating a
 //! centred capsule swings it about its middle, and a leg that does that is not
 //! walking, it is being stirred.
+//!
+//! Every part also carries its [`Rest`] pose, which is what makes the whole
+//! figure squash and stretch as one. The alternative — scaling the body entity
+//! — is not available: Avian scales a collider by its transform, so a figure
+//! flattening at the bottom of a hop would flatten its own collider with it and
+//! sink through the pavement.
 
 use bevy::prelude::*;
 use rand::RngExt;
 use rand_chacha::ChaCha8Rng;
+
+use crate::bounce::controller::Bouncer;
 
 /// Metres walked per full stride cycle — one step of each foot.
 const STRIDE: f32 = 1.45;
@@ -53,9 +61,47 @@ impl Limb {
     }
 }
 
-/// The upper body, which rises and falls with the stride.
+/// The head. Marked because it is the one part of a figure that anything else
+/// wants to find: it is where the face goes.
 #[derive(Component)]
-pub struct Torso;
+pub struct Head;
+
+/// Skin, of which a flummi has exactly two patches: its hands.
+///
+/// Marked for the same reason the head is. A flummi's complexion is its mood —
+/// it goes red with the face — and skin-toned hands under an emoji head read as
+/// a bug rather than as a person.
+#[derive(Component)]
+pub struct Bare;
+
+/// How a part of a figure sits when the body is at its natural height.
+///
+/// Held per part rather than looked up from the part's kind, so that posing a
+/// figure is one query over its children instead of a match with an arm for
+/// every piece of anatomy.
+///
+/// A scale as well as a position, because one part is not a unit shape: the
+/// hair is a flattened sphere, and the squash multiplies this rather than
+/// replacing it. Without that the cap is round again at the bottom of every
+/// hop, which is a head growing a bubble sixty times a second.
+#[derive(Component, Clone, Copy)]
+pub struct Rest {
+    pub at: Vec3,
+    pub scale: Vec3,
+}
+
+impl Rest {
+    pub fn at(at: Vec3) -> Self {
+        Self {
+            at,
+            scale: Vec3::ONE,
+        }
+    }
+
+    pub fn posed(at: Vec3, scale: Vec3) -> Self {
+        Self { at, scale }
+    }
+}
 
 /// How far through a stride this figure is, and how fast it is covering ground.
 ///
@@ -74,8 +120,12 @@ pub struct FigureAssets {
     head: Handle<Mesh>,
     arm: Handle<Mesh>,
     leg: Handle<Mesh>,
-    skin: Vec<Handle<StandardMaterial>>,
+    hand: Handle<Mesh>,
+    hair: Handle<Mesh>,
+    shoe: Handle<Mesh>,
     trousers: Vec<Handle<StandardMaterial>>,
+    hair_colours: Vec<Handle<StandardMaterial>>,
+    leather: Handle<StandardMaterial>,
 }
 
 /// Proportions, in metres, measured from the middle of the collider capsule.
@@ -94,6 +144,14 @@ mod body {
     pub const HEAD_RADIUS: f32 = 0.13;
     pub const LEG_LENGTH: f32 = HIP - FEET;
     pub const ARM_LENGTH: f32 = 0.60;
+    pub const HAND_RADIUS: f32 = 0.062;
+    /// A cap rather than a hairstyle: at the distance a pedestrian is normally
+    /// seen, the only thing hair does is stop the head reading as a bare ball.
+    pub const HAIR_RADIUS: f32 = 0.134;
+    pub const HAIR_FLATTEN: f32 = 0.74;
+    pub const HAIR_RISE: f32 = 0.026;
+    pub const SHOE_HEIGHT: f32 = 0.062;
+    pub const SHOE_LENGTH: f32 = 0.245;
 }
 
 /// Half the collider capsule's height, which is what the figure has to fit in.
@@ -119,6 +177,33 @@ const _: () = {
         body::LEG_LENGTH > 0.0 && body::ARM_LENGTH > 0.0,
         "a limb has no length"
     );
+    assert!(
+        body::HEAD_CENTRE + body::HAIR_RISE + body::HAIR_RADIUS * body::HAIR_FLATTEN
+            <= CAPSULE_HALF,
+        "the hair stands above the capsule"
+    );
+    assert!(
+        body::FEET + body::SHOE_HEIGHT * 0.5 >= -CAPSULE_HALF,
+        "the shoes sink through the capsule"
+    );
+    // A hairline below the chin is a balaclava and one above the crown is a
+    // beret. Neither fails, and neither is something anybody would report as a
+    // bug — they would just say the pedestrians look odd.
+    assert!(
+        body::HEAD_CENTRE + body::HAIR_RISE - body::HAIR_RADIUS * body::HAIR_FLATTEN
+            > body::HEAD_CENTRE - body::HEAD_RADIUS,
+        "the hair has swallowed the face"
+    );
+    assert!(
+        body::HEAD_CENTRE + body::HAIR_RISE - body::HAIR_RADIUS * body::HAIR_FLATTEN
+            < body::HEAD_CENTRE + body::HEAD_RADIUS,
+        "the hair is floating above the head"
+    );
+    // And wide enough to wrap it, or it sits on top like a lid.
+    assert!(
+        body::HAIR_RADIUS > body::HEAD_RADIUS,
+        "the hair is narrower than the head it is on"
+    );
 };
 
 pub fn build_assets(
@@ -130,10 +215,18 @@ pub fn build_assets(
         perceptual_roughness: 0.88,
         ..default()
     };
+    // Skin is not cloth — at a wool coat's roughness a face takes no highlight
+    // at all and reads as a mannequin — but no skin is mixed here any more.
+    // Every uncovered part of a flummi is its complexion, which is its mood,
+    // and both the head and the hands take their material from
+    // `crate::mood::face` for that reason.
 
     FigureAssets {
         torso: meshes.add(Cuboid::new(0.36, body::TORSO_HEIGHT, 0.22)),
-        head: meshes.add(Sphere::new(body::HEAD_RADIUS)),
+        // A UV sphere rather than the default icosphere: the face is painted
+        // into a texture, and an icosphere's seams run wherever they like.
+        // See `crate::mood::face::head_mesh` for why it is turned on its side.
+        head: meshes.add(crate::mood::face::head_mesh(body::HEAD_RADIUS)),
         arm: meshes.add(Capsule3d {
             radius: 0.058,
             half_length: body::ARM_LENGTH * 0.5 - 0.058,
@@ -142,15 +235,26 @@ pub fn build_assets(
             radius: 0.078,
             half_length: body::LEG_LENGTH * 0.5 - 0.078,
         }),
-        skin: [
-            Color::srgb(0.76, 0.60, 0.48),
-            Color::srgb(0.58, 0.42, 0.32),
-            Color::srgb(0.38, 0.26, 0.19),
-            Color::srgb(0.86, 0.72, 0.60),
+        hand: meshes.add(Sphere::new(body::HAND_RADIUS)),
+        hair: meshes.add(Sphere::new(body::HAIR_RADIUS)),
+        shoe: meshes.add(Cuboid::new(0.105, body::SHOE_HEIGHT, body::SHOE_LENGTH)),
+        hair_colours: [
+            Color::srgb(0.07, 0.06, 0.06),
+            Color::srgb(0.19, 0.13, 0.09),
+            Color::srgb(0.35, 0.26, 0.16),
+            Color::srgb(0.52, 0.49, 0.47),
         ]
         .into_iter()
+        // Hair is matte and dark, and it is the darkness that does the work:
+        // what a cap of it buys is a head that ends in a shape instead of
+        // fading into whatever is behind it.
         .map(|color| materials.add(cloth(color)))
         .collect(),
+        leather: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.09, 0.08, 0.08),
+            perceptual_roughness: 0.64,
+            ..default()
+        }),
         trousers: [
             Color::srgb(0.16, 0.18, 0.24),
             Color::srgb(0.22, 0.20, 0.18),
@@ -163,58 +267,111 @@ pub fn build_assets(
 }
 
 /// Hangs a figure off an entity that already has its collider and behaviour.
+///
+/// The face and the complexion arrive already chosen, because which ones they
+/// are depends on how the figure feels — see [`crate::mood::face::Worn`].
+/// Nobody in this city has a skin tone; every head is an emoji.
 pub fn dress(
     entity: &mut EntityCommands,
     assets: &FigureAssets,
     coat: Handle<StandardMaterial>,
+    worn: &crate::mood::face::Worn,
     rng: &mut ChaCha8Rng,
 ) {
-    let skin = assets.skin[rng.random_range(0..assets.skin.len())].clone();
     let trousers = assets.trousers[rng.random_range(0..assets.trousers.len())].clone();
+    let hair = assets.hair_colours[rng.random_range(0..assets.hair_colours.len())].clone();
 
     entity.insert(WalkCycle::default());
     entity.with_children(|parent| {
+        let torso = Vec3::new(0.0, body::TORSO_CENTRE, 0.0);
         parent.spawn((
-            Torso,
+            Rest::at(torso),
             Mesh3d(assets.torso.clone()),
             MeshMaterial3d(coat.clone()),
-            Transform::from_xyz(0.0, body::TORSO_CENTRE, 0.0),
+            Transform::from_translation(torso),
         ));
+        let head = Vec3::new(0.0, body::HEAD_CENTRE, 0.0);
         parent.spawn((
-            Torso,
+            Head,
+            Rest::at(head),
             Mesh3d(assets.head.clone()),
-            MeshMaterial3d(skin.clone()),
-            Transform::from_xyz(0.0, body::HEAD_CENTRE, 0.0),
+            MeshMaterial3d(worn.face.clone()),
+            Transform::from_translation(head),
+        ));
+        // A shade wider than the head and sat a little high and a little back,
+        // so the crown is covered and the face below it is not. The hairline
+        // this puts on a figure is low — the cap cannot rise much further and
+        // still fit inside the collider — but at the distance a pedestrian is
+        // seen it is the dark top to the silhouette that does the work, not
+        // where exactly it starts.
+        let cap = Vec3::new(0.0, body::HEAD_CENTRE + body::HAIR_RISE, 0.018);
+        let flattened = Vec3::new(1.0, body::HAIR_FLATTEN, 1.0);
+        parent.spawn((
+            Rest::posed(cap, flattened),
+            Mesh3d(assets.hair.clone()),
+            MeshMaterial3d(hair.clone()),
+            Transform::from_translation(cap).with_scale(flattened),
         ));
 
         for (limb, side) in [(Limb::LeftArm, -1.0f32), (Limb::RightArm, 1.0)] {
+            let joint = Vec3::new(side * body::SHOULDER_X, body::SHOULDER, 0.0);
             parent
                 .spawn((
                     limb,
-                    Transform::from_xyz(side * body::SHOULDER_X, body::SHOULDER, 0.0),
+                    Rest::at(joint),
+                    Transform::from_translation(joint),
                     Visibility::default(),
                 ))
                 // Hung below the joint, so the parent's rotation swings it from
                 // the shoulder rather than spinning it about its own middle.
-                .with_child((
-                    Mesh3d(assets.arm.clone()),
-                    MeshMaterial3d(coat.clone()),
-                    Transform::from_xyz(0.0, -body::ARM_LENGTH * 0.5, 0.0),
-                ));
+                .with_children(|joint| {
+                    joint.spawn((
+                        Mesh3d(assets.arm.clone()),
+                        MeshMaterial3d(coat.clone()),
+                        Transform::from_xyz(0.0, -body::ARM_LENGTH * 0.5, 0.0),
+                    ));
+                    // A sleeve that ends in nothing is the other half of why
+                    // a figure reads as a shop dummy. The hand is one sphere
+                    // and it swings with the arm because it hangs off the
+                    // same joint.
+                    joint.spawn((
+                        Bare,
+                        Mesh3d(assets.hand.clone()),
+                        MeshMaterial3d(worn.bare.clone()),
+                        Transform::from_xyz(0.0, -body::ARM_LENGTH, 0.0),
+                    ));
+                });
         }
 
         for (limb, side) in [(Limb::LeftLeg, -1.0f32), (Limb::RightLeg, 1.0)] {
+            let joint = Vec3::new(side * 0.10, body::HIP, 0.0);
             parent
                 .spawn((
                     limb,
-                    Transform::from_xyz(side * 0.10, body::HIP, 0.0),
+                    Rest::at(joint),
+                    Transform::from_translation(joint),
                     Visibility::default(),
                 ))
-                .with_child((
-                    Mesh3d(assets.leg.clone()),
-                    MeshMaterial3d(trousers.clone()),
-                    Transform::from_xyz(0.0, -body::LEG_LENGTH * 0.5, 0.0),
-                ));
+                .with_children(|joint| {
+                    joint.spawn((
+                        Mesh3d(assets.leg.clone()),
+                        MeshMaterial3d(trousers.clone()),
+                        Transform::from_xyz(0.0, -body::LEG_LENGTH * 0.5, 0.0),
+                    ));
+                    // Toes forward, and the sole exactly on the capsule's
+                    // bottom cap — which is where the ground check puts the
+                    // figure, so this is the one part that has to be right or
+                    // everybody walks on their ankles.
+                    joint.spawn((
+                        Mesh3d(assets.shoe.clone()),
+                        MeshMaterial3d(assets.leather.clone()),
+                        Transform::from_xyz(
+                            0.0,
+                            -body::LEG_LENGTH + body::SHOE_HEIGHT * 0.5,
+                            -body::SHOE_LENGTH * 0.22,
+                        ),
+                    ));
+                });
         }
     });
 }
@@ -224,37 +381,43 @@ pub fn limb_angle(limb: Limb, phase: f32) -> f32 {
     (phase + limb.phase_offset()).sin() * limb.amplitude()
 }
 
-/// How much the body rises at a given point in the stride.
+/// Advances every figure's stride, poses its limbs, and squashes it into
+/// whatever part of its hop it is in.
 ///
-/// Twice per cycle, because the body lifts over each leg in turn — a bob at the
-/// stride frequency is a limp.
-pub fn bob(phase: f32) -> f32 {
-    (phase * 2.0).cos() * 0.022
-}
-
-/// Advances every figure's stride and poses its limbs.
+/// The stride and the hop are independent on purpose. The legs are paced by
+/// ground covered and the squash by the bounce, so a flummi sailing across a
+/// junction is still running in mid-air — which is both what a cartoon does and
+/// what the walk cycle would do anyway if asked.
 pub fn animate(
     time: Res<Time>,
-    figures: Query<(&mut WalkCycle, &Children)>,
-    mut limbs: Query<(&Limb, &mut Transform), Without<Torso>>,
-    mut torsos: Query<&mut Transform, (With<Torso>, Without<Limb>)>,
+    config: Res<crate::core::config::GameConfig>,
+    figures: Query<(&mut WalkCycle, Option<&Bouncer>, &Children)>,
+    mut parts: Query<(&mut Transform, &Rest, Option<&Limb>)>,
 ) {
     let dt = time.delta_secs();
-    for (mut cycle, children) in figures {
+    for (mut cycle, bouncer, children) in figures {
         // Driven by distance covered, not by time: someone running has to take
         // faster steps, not longer ones, or they moonwalk.
         cycle.phase = (cycle.phase + cycle.speed / STRIDE * TAU_F32 * dt) % TAU_F32;
 
+        let (vertical, horizontal) = match bouncer {
+            Some(bouncer) => {
+                crate::bounce::squash::stretch(bouncer.hop_phase(), config.bounce.squash)
+            }
+            None => (1.0, 1.0),
+        };
+        let pose = Vec3::new(horizontal, vertical, horizontal);
+
         for &child in children {
-            if let Ok((limb, mut transform)) = limbs.get_mut(child) {
+            let Ok((mut transform, rest, limb)) = parts.get_mut(child) else {
+                continue;
+            };
+            // The rest pose scaled by the squash, so parts stay attached to one
+            // another as the body flattens instead of pulling apart at the neck.
+            transform.translation = rest.at * pose;
+            transform.scale = rest.scale * pose;
+            if let Some(limb) = limb {
                 transform.rotation = Quat::from_rotation_x(limb_angle(*limb, cycle.phase));
-            } else if let Ok(mut transform) = torsos.get_mut(child) {
-                let rest = if transform.translation.y > body::HEAD_CENTRE - 0.01 {
-                    body::HEAD_CENTRE
-                } else {
-                    body::TORSO_CENTRE
-                };
-                transform.translation.y = rest + bob(cycle.phase);
             }
         }
     }
@@ -328,16 +491,17 @@ mod tests {
     }
 
     #[test]
-    fn the_body_bobs_twice_per_stride() {
-        // Once per stride is a limp: the body lifts over each leg in turn.
-        let mut peaks = 0;
-        for i in 0..1024 {
-            let phase = TAU_F32 * i as f32 / 1024.0;
-            let step = TAU_F32 / 1024.0;
-            if bob(phase) > bob(phase - step) && bob(phase) >= bob(phase + step) {
-                peaks += 1;
-            }
+    fn the_head_rides_above_the_chest_at_every_squash() {
+        // The parts are posed by scaling one rest pose, so they can only come
+        // apart if the scale is applied to one of them and not the other.
+        for step in 0..16 {
+            let (vertical, _) = crate::bounce::squash::stretch(step as f32 / 16.0, 0.35);
+            let head = body::HEAD_CENTRE * vertical;
+            let chest = body::TORSO_CENTRE * vertical;
+            assert!(
+                head > chest,
+                "the head sank into the chest at {vertical:.2}"
+            );
         }
-        assert_eq!(peaks, 2, "counted {peaks} rises per stride");
     }
 }

@@ -5,6 +5,7 @@ pub mod capture;
 pub mod config;
 pub mod rng;
 pub mod schedule;
+pub mod settings;
 pub mod states;
 
 use bevy::prelude::*;
@@ -16,7 +17,7 @@ impl Plugin for CorePlugin {
         app.add_plugins((
             states::GameStatesPlugin,
             schedule::SchedulePlugin,
-            config::ConfigPlugin,
+            settings::SettingsPlugin,
             capture::CapturePlugin,
         ));
     }

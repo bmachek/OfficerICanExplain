@@ -2,8 +2,8 @@
 //!
 //! Two shapes of sound, handled differently on purpose:
 //!
-//! * **One-shots** are spawned per event and despawn themselves. A gunshot, a
-//!   crash, a door. Cheap, fire and forget.
+//! * **One-shots** are spawned per event and despawn themselves. A crash, a
+//!   door, a footfall. Cheap, fire and forget.
 //! * **Voices** are loops owned by an entity, living as a child of it so the
 //!   spatial mixer follows the car around, and modulated every frame — engine
 //!   pitch from road speed, tyre squeal from how far the tyres are actually
@@ -21,13 +21,8 @@ use rand::RngExt;
 use super::bank::SoundBank;
 use super::synth::SynthSound;
 use super::{AudioRng, BLAST_EARSHOT, close_once, effect_gain, spatial_once};
-use crate::ai::police::PoliceUnit;
-use crate::combat::health::Died;
-use crate::combat::weapons::{WeaponFired, WeaponKind};
 use crate::core::config::GameConfig;
 use crate::core::schedule::GameSet;
-use crate::crime::wanted::Wanted;
-use crate::mission::Campaign;
 use crate::player::interact::{DrivenBy, Driving};
 use crate::player::on_foot::Player;
 use crate::vehicle::controller::{VehicleInput, VehicleState};
@@ -53,17 +48,12 @@ const CRASH_FULL: f32 = 16.0;
 /// Per-sound gains, so the mix is one block of numbers rather than a constant
 /// buried in each system.
 mod gain {
-    pub const PISTOL: f32 = 0.85;
-    pub const SMG: f32 = 0.55;
     pub const EXPLOSION: f32 = 1.0;
     pub const CRASH: f32 = 0.9;
-    pub const THUD: f32 = 0.7;
     pub const FOOTSTEP: f32 = 0.30;
     pub const DOOR: f32 = 0.6;
     pub const ENGINE: f32 = 0.55;
-    pub const SIREN: f32 = 0.45;
     pub const SCREECH: f32 = 0.55;
-    pub const STING: f32 = 0.7;
 }
 
 /// A looping sound belonging to a vehicle.
@@ -76,7 +66,6 @@ struct Voice {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum VoiceKind {
     Engine,
-    Siren,
     Screech,
 }
 
@@ -93,13 +82,10 @@ impl Plugin for SfxPlugin {
             (
                 start_ambience,
                 (
-                    play_weapon_fire,
                     play_impacts,
                     play_explosions,
-                    play_deaths,
                     play_doors,
                     play_footsteps,
-                    play_stingers,
                     manage_vehicle_voices,
                     update_vehicle_voices,
                     update_ambience,
@@ -126,23 +112,6 @@ fn at(
         settings,
         Transform::from_translation(position),
     ));
-}
-
-fn play_weapon_fire(
-    mut commands: Commands,
-    config: Res<GameConfig>,
-    bank: Res<SoundBank>,
-    mut shots: MessageReader<WeaponFired>,
-) {
-    for shot in shots.read() {
-        let (sound, gain) = match shot.kind {
-            WeaponKind::Pistol => (bank.pistol.clone(), gain::PISTOL),
-            WeaponKind::Smg => (bank.smg.clone(), gain::SMG),
-        };
-        // The player's own weapon is at their shoulder, not somewhere in the
-        // world, so it is not spatialised.
-        commands.spawn((AudioPlayer(sound), close_once(effect_gain(&config, gain))));
-    }
 }
 
 fn play_impacts(
@@ -181,22 +150,6 @@ fn play_explosions(
             bank.explosion.clone(),
             wreck.position,
             spatial_once(effect_gain(&config, gain::EXPLOSION), BLAST_EARSHOT),
-        );
-    }
-}
-
-fn play_deaths(
-    mut commands: Commands,
-    config: Res<GameConfig>,
-    bank: Res<SoundBank>,
-    mut deaths: MessageReader<Died>,
-) {
-    for death in deaths.read() {
-        at(
-            &mut commands,
-            bank.thud.clone(),
-            death.position,
-            spatial_once(effect_gain(&config, gain::THUD), 16.0),
         );
     }
 }
@@ -265,32 +218,6 @@ fn play_footsteps(
     ));
 }
 
-/// Short musical cues for the two things the player needs told immediately:
-/// the heat going up, and a job going in the bank.
-fn play_stingers(
-    mut commands: Commands,
-    config: Res<GameConfig>,
-    bank: Res<SoundBank>,
-    wanted: Res<Wanted>,
-    campaign: Res<Campaign>,
-    mut last_stars: Local<u8>,
-    mut last_jobs: Local<usize>,
-) {
-    let volume = close_once(effect_gain(&config, gain::STING));
-
-    let stars = wanted.stars();
-    if stars > *last_stars {
-        commands.spawn((AudioPlayer(bank.star.clone()), volume));
-    }
-    *last_stars = stars;
-
-    let jobs = campaign.completed.len();
-    if jobs > *last_jobs {
-        commands.spawn((AudioPlayer(bank.chime.clone()), volume));
-    }
-    *last_jobs = jobs;
-}
-
 // ---------------------------------------------------------------- voices ----
 
 /// Engine pitch from road speed and throttle, as a playback speed multiplier.
@@ -320,19 +247,16 @@ pub fn engine_pitch(speed_kph: f32, throttle: f32) -> f32 {
 /// Adds a loop set to every vehicle that should be making noise, and takes them
 /// away again when it stops.
 ///
-/// A car qualifies if something is driving it: the player, traffic or the
-/// police, all of which are exempt from distance culling. Several hundred cars
-/// are parked around the city and none of them has its engine running.
+/// A car qualifies if something is driving it: the player or traffic, both of
+/// which are exempt from distance culling. Several hundred cars are parked
+/// around the city and none of them has its engine running.
 fn manage_vehicle_voices(
     mut commands: Commands,
     bank: Res<SoundBank>,
-    driven: Query<
-        (Entity, Has<PoliceUnit>),
-        (With<Vehicle>, Or<(With<DrivenBy>, With<AlwaysSimulated>)>),
-    >,
+    driven: Query<Entity, (With<Vehicle>, Or<(With<DrivenBy>, With<AlwaysSimulated>)>)>,
     voices: Query<(Entity, &Voice)>,
 ) {
-    let running: HashSet<Entity> = driven.iter().map(|(entity, _)| entity).collect();
+    let running: HashSet<Entity> = driven.iter().collect();
 
     let mut voiced: HashSet<Entity> = HashSet::default();
     for (entity, voice) in &voices {
@@ -343,7 +267,7 @@ fn manage_vehicle_voices(
         }
     }
 
-    for (vehicle, police) in &driven {
+    for vehicle in &driven {
         if voiced.contains(&vehicle) {
             continue;
         }
@@ -372,24 +296,12 @@ fn manage_vehicle_voices(
                 looping,
                 place,
             ));
-            if police {
-                car.spawn((
-                    Voice {
-                        owner: vehicle,
-                        kind: VoiceKind::Siren,
-                    },
-                    AudioPlayer(bank.siren.clone()),
-                    looping,
-                    place,
-                ));
-            }
         });
     }
 }
 
 fn update_vehicle_voices(
     config: Res<GameConfig>,
-    wanted: Res<Wanted>,
     vehicles: Query<(&VehicleState, &VehicleInput)>,
     mut voices: Query<(&Voice, &mut SpatialAudioSink)>,
 ) {
@@ -405,13 +317,6 @@ fn update_vehicle_voices(
                 // Idling is audible; working is loud.
                 let load = input.throttle.abs().max((speed_kph / 70.0).min(1.0) * 0.6);
                 effect_gain(&config, gain::ENGINE) * (0.35 + 0.65 * load)
-            }
-            VoiceKind::Siren => {
-                if wanted.is_wanted() {
-                    effect_gain(&config, gain::SIREN)
-                } else {
-                    0.0
-                }
             }
             VoiceKind::Screech => {
                 let sliding = if speed_kph < SQUEAL_FLOOR_KPH {

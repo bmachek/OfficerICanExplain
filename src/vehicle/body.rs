@@ -97,6 +97,207 @@ pub struct BodyProfile {
     pub lower: Vec<Section>,
     /// The greenhouse, narrower and set into the shell. Empty for a bare cab.
     pub cabin: Vec<Section>,
+    /// Glazing cut straight out of the shell, for a cab that has no greenhouse
+    /// of its own to glaze. A van's windscreen is not set into anything — it
+    /// *is* the front of the box — so there is nothing to loft it from but the
+    /// box itself.
+    pub windows: Vec<Cut>,
+}
+
+/// The centre of a cross-section, on the car's midline.
+fn section_centre(section: &Section, scale: Vec3) -> Vec3 {
+    Vec3::new(
+        0.0,
+        (section.top + section.bottom) * 0.5 * scale.y,
+        (section.at * 2.0 - 1.0) * scale.z,
+    )
+}
+
+/// One point on a cross-section's ring.
+///
+/// `around` is the fraction of the way round it, measured from the bottom
+/// centre so that zero lands on the seam underneath the car. A quarter is the
+/// right flank at mid-height, a half the roof, three quarters the left flank.
+///
+/// Split out from [`ring`] rather than left inside it because [`panel`] needs
+/// points at arbitrary fractions: a pillar is a tenth of the way round, and
+/// rounding it to the nearest of twenty-eight sampled points would make its
+/// width depend on where it happened to land.
+fn ring_point(section: &Section, scale: Vec3, belt: Option<f32>, around: f32) -> Vec3 {
+    let centre = section_centre(section, scale);
+    let half_height = (section.top - section.bottom) * 0.5 * scale.y;
+    let half_width = section.half_width * scale.x;
+    // The exponent that turns a circle into a rounded box.
+    let power = 2.0 / section.squareness.max(2.0);
+
+    let theta = std::f32::consts::TAU * around - FRAC_PI_2;
+    let (sin, cos) = theta.sin_cos();
+    let y = centre.y + half_height * sin.signum() * sin.abs().powf(power);
+    let taper = match belt {
+        Some(height) if y > height * scale.y => TUMBLEHOME,
+        _ => 1.0,
+    };
+    Vec3::new(
+        half_width * taper * cos.signum() * cos.abs().powf(power),
+        y,
+        centre.z,
+    )
+}
+
+/// One whole cross-section, sampled at [`RING`] points and creased at the belt.
+fn ring(section: &Section, scale: Vec3, belt: Option<f32>) -> Vec<Vec3> {
+    let mut points: Vec<Vec3> = (0..RING)
+        .map(|i| ring_point(section, scale, belt, i as f32 / RING as f32))
+        .collect();
+
+    // Snap the two points that straddle the belt onto it. Left to fall
+    // where the sampling happens to put them, the step spreads over the
+    // ring's own vertical spacing and comes out at about thirty-five
+    // degrees — under any threshold loose enough to leave the roof round.
+    // Pinned to the same height, the ledge between them is horizontal, the
+    // flank either side is vertical, and the fold is a right angle that no
+    // amount of tessellation can soften.
+    if let Some(height) = belt {
+        let belt_y = height * scale.y;
+        let half_width = section.half_width * scale.x;
+        for i in 0..RING {
+            let j = (i + 1) % RING;
+            let (a, b) = (points[i], points[j]);
+            let crosses = (a.y - belt_y) * (b.y - belt_y) < 0.0;
+            // Only on the flanks. Over the roof and under the floor the
+            // ring is nearly horizontal, and a crease there is a dent.
+            let on_the_flank = a.x.abs().min(b.x.abs()) > half_width * 0.45;
+            if crosses && on_the_flank {
+                points[i].y = belt_y;
+                points[j].y = belt_y;
+            }
+        }
+    }
+    points
+}
+
+/// The cross-section a fraction of the way along a run.
+///
+/// Interpolated in *index* space rather than in `at`, because index space is
+/// what the loft's own V coordinate is in. A cut that ends at 0.4 therefore
+/// lands exactly on the third of six sections, and the panel trimmed out of it
+/// sits exactly on the surface it was cut from instead of a centimetre off it.
+fn section_at(sections: &[Section], along: f32) -> Section {
+    let last = sections.len() - 1;
+    let position = (along.clamp(0.0, 1.0) * last as f32).min(last as f32 - 1e-4);
+    let index = position.floor() as usize;
+    let t = position - index as f32;
+    let (a, b) = (sections[index], sections[index + 1]);
+    Section {
+        at: a.at.lerp(b.at, t),
+        half_width: a.half_width.lerp(b.half_width, t),
+        bottom: a.bottom.lerp(b.bottom, t),
+        top: a.top.lerp(b.top, t),
+        squareness: a.squareness.lerp(b.squareness, t),
+    }
+}
+
+/// The cross-section at a position along the car.
+///
+/// [`section_at`] walks index space, which is what the loft's own V is in.
+/// This walks `at` instead, which is what one loft and another have in common:
+/// a shell and a greenhouse have different numbers of sections at different
+/// spacings, so the only way to ask "what is the body doing where the cabin
+/// starts" is to ask in the coordinate they share.
+pub fn section_where(sections: &[Section], at: f32) -> Section {
+    let last = sections.len() - 1;
+    let index = sections
+        .windows(2)
+        .position(|pair| at < pair[1].at)
+        .unwrap_or(last - 1);
+    let (a, b) = (sections[index], sections[index + 1]);
+    let span = (b.at - a.at).max(1e-5);
+    section_at(sections, (index as f32 + (at - a.at) / span) / last as f32)
+}
+
+/// A rectangle of a lofted surface, in the surface's own coordinates.
+///
+/// The frame of a greenhouse is not a different shape from the glass it holds:
+/// a roof, a header and an A-pillar are the parts of one pressing that were
+/// left as steel, and the glazing is the holes in it. Cutting them out of the
+/// same loft is what keeps them agreeing — a pillar described independently
+/// would have to be re-derived every time a cabin's rake changed.
+#[derive(Debug, Clone, Copy)]
+pub struct Cut {
+    /// Fraction of the way round the ring, as [`ring_point`] measures it.
+    pub around: (f32, f32),
+    /// Fraction of the way along the section run, matching the loft's own V.
+    pub along: (f32, f32),
+}
+
+impl Cut {
+    const fn new(around: (f32, f32), along: (f32, f32)) -> Self {
+        Self { around, along }
+    }
+}
+
+/// Skins one [`Cut`], lifted clear of the surface it was taken from.
+///
+/// `swell` is a fraction of the section's own radius rather than a distance,
+/// so the same cut sits proud by a sensible amount on a hatchback and on a van.
+fn panel(sections: &[Section], cut: &Cut, scale: Vec3, belt: Option<f32>, swell: f32) -> Mesh {
+    let (u0, u1) = cut.around;
+    let (v0, v1) = cut.along;
+    // Matched to the loft's own density, and no finer: a pillar two ring
+    // segments wide gains nothing from eight columns of triangles, and the
+    // frame is drawn on every car in the city.
+    let columns = (((u1 - u0).abs() * RING as f32).ceil() as usize).max(1);
+    let rows = ((((v1 - v0).abs() * (sections.len() - 1) as f32) * 3.0).ceil() as usize).max(1);
+
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity((columns + 1) * (rows + 1));
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity((columns + 1) * (rows + 1));
+    let mut indices: Vec<u32> = Vec::new();
+
+    for r in 0..=rows {
+        let v = v0.lerp(v1, r as f32 / rows as f32);
+        let section = section_at(sections, v);
+        let centre = section_centre(&section, scale);
+        for c in 0..=columns {
+            let u = u0.lerp(u1, c as f32 / columns as f32);
+            let point = ring_point(&section, scale, belt, u);
+            positions.push((centre + (point - centre) * (1.0 + swell)).to_array());
+            uvs.push([c as f32 / columns as f32, v]);
+        }
+    }
+
+    let stride = (columns + 1) as u32;
+    for r in 0..rows as u32 {
+        for c in 0..columns as u32 {
+            let (here, next) = (r * stride + c, (r + 1) * stride + c);
+            // Same winding as the loft, for the same reason: taken the obvious
+            // way round, every panel faces into the car.
+            indices.extend_from_slice(&[here, next + 1, next, here, here + 1, next + 1]);
+        }
+    }
+
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Skins several cuts into one mesh.
+///
+/// Merged rather than spawned as separate entities so that a car's whole frame
+/// is one draw: the parts never move relative to each other, and each patch
+/// keeps its own vertices anyway, so the fold where the roof meets a header
+/// stays hard without any crease-splitting.
+fn panels(sections: &[Section], cuts: &[Cut], scale: Vec3, belt: Option<f32>, swell: f32) -> Mesh {
+    let mut merged = panel(sections, &cuts[0], scale, belt, swell);
+    for cut in &cuts[1..] {
+        merged
+            .merge(&panel(sections, cut, scale, belt, swell))
+            .expect("every panel is built the same way");
+    }
+    merged.with_computed_smooth_normals()
 }
 
 /// Skins a series of cross-sections into a closed mesh.
@@ -113,60 +314,10 @@ fn loft(sections: &[Section], scale: Vec3, belt: Option<f32>) -> Mesh {
     let mut uvs: Vec<[f32; 2]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
 
-    let ring_at = |section: &Section| -> Vec<Vec3> {
-        let z = (section.at * 2.0 - 1.0) * scale.z;
-        let center = (section.top + section.bottom) * 0.5 * scale.y;
-        let half_height = (section.top - section.bottom) * 0.5 * scale.y;
-        let half_width = section.half_width * scale.x;
-        // The exponent that turns a circle into a rounded box.
-        let power = 2.0 / section.squareness.max(2.0);
-
-        let mut points: Vec<Vec3> = (0..RING)
-            .map(|i| {
-                let theta = std::f32::consts::TAU * (i as f32 / RING as f32) - FRAC_PI_2;
-                let (sin, cos) = theta.sin_cos();
-                let y = center + half_height * sin.signum() * sin.abs().powf(power);
-                let taper = match belt {
-                    Some(height) if y > height * scale.y => TUMBLEHOME,
-                    _ => 1.0,
-                };
-                Vec3::new(
-                    half_width * taper * cos.signum() * cos.abs().powf(power),
-                    y,
-                    z,
-                )
-            })
-            .collect();
-
-        // Snap the two points that straddle the belt onto it. Left to fall
-        // where the sampling happens to put them, the step spreads over the
-        // ring's own vertical spacing and comes out at about thirty-five
-        // degrees — under any threshold loose enough to leave the roof round.
-        // Pinned to the same height, the ledge between them is horizontal, the
-        // flank either side is vertical, and the fold is a right angle that no
-        // amount of tessellation can soften.
-        if let Some(height) = belt {
-            let belt_y = height * scale.y;
-            for i in 0..RING {
-                let j = (i + 1) % RING;
-                let (a, b) = (points[i], points[j]);
-                let crosses = (a.y - belt_y) * (b.y - belt_y) < 0.0;
-                // Only on the flanks. Over the roof and under the floor the
-                // ring is nearly horizontal, and a crease there is a dent.
-                let on_the_flank = a.x.abs().min(b.x.abs()) > half_width * 0.45;
-                if crosses && on_the_flank {
-                    points[i].y = belt_y;
-                    points[j].y = belt_y;
-                }
-            }
-        }
-        points
-    };
-
     // --- the skin ---
     for (s, section) in sections.iter().enumerate() {
         let v = s as f32 / (sections.len() - 1) as f32;
-        for (i, point) in ring_at(section).into_iter().enumerate() {
+        for (i, point) in ring(section, scale, belt).into_iter().enumerate() {
             positions.push(point.to_array());
             uvs.push([i as f32 / RING as f32, v]);
         }
@@ -193,7 +344,7 @@ fn loft(sections: &[Section], scale: Vec3, belt: Option<f32>) -> Mesh {
 
     // --- the caps ---
     for (section, front) in [(sections[0], true), (*sections.last().unwrap(), false)] {
-        let ring = ring_at(&section);
+        let ring = ring(&section, scale, belt);
         let center = ring.iter().copied().sum::<Vec3>() / RING as f32;
         let base = positions.len() as u32;
 
@@ -309,6 +460,54 @@ pub fn rim_mesh(width: f32) -> Mesh {
     )
 }
 
+/// Where the steel is, on a greenhouse that has one.
+///
+/// Shared by every archetype with a cabin, and it can be shared because every
+/// cabin in the table below is described by the same six sections playing the
+/// same six parts: cowl, lower screen, top of the screen, back of the roof,
+/// lower backlight, tail. Index space therefore means the same thing on a
+/// saloon and on a wedge, and `a_cabin_is_described_in_six_parts` is what keeps
+/// it that way — add a seventh section to one cabin and every pillar on that
+/// car slides to the wrong place.
+///
+/// The pattern is a checkerboard, and it falls out of what the two coordinates
+/// mean. Along the car, a greenhouse is screen, then roof, then backlight.
+/// Around a cross-section, it is flank, then roof, then flank. So the *top* of
+/// the tube is glass at each end and steel in the middle, and the *flanks* are
+/// steel at each end and glass in the middle — which is a windscreen, a roof, a
+/// backlight, and door glass between an A-, a B- and a C-pillar. Nothing here
+/// describes the shape of a pillar; it only says which parts of the greenhouse
+/// were never cut out of it.
+const GREENHOUSE: [Cut; 7] = [
+    // The roof, from one shoulder over to the other. Its ends are where the
+    // pillars stop, so the screen and the backlight are exactly the gaps left
+    // over: shift one number and the frame stays closed.
+    Cut::new((0.375, 0.625), (0.215, 0.785)),
+    // Everything on the flanks ahead of the screen's top edge: the A-pillar,
+    // and the cowl side below it. A fifth of the cabin, not a third — a
+    // third is what a coupé's short greenhouse turns into two window slots
+    // with more paint between them than glass.
+    Cut::new((0.020, 0.385), (0.000, 0.215)),
+    Cut::new((0.615, 0.980), (0.000, 0.215)),
+    // The same behind the backlight: C-pillar and rear quarter.
+    Cut::new((0.020, 0.385), (0.785, 1.000)),
+    Cut::new((0.615, 0.980), (0.785, 1.000)),
+    // The B-pillar, splitting the side glass into a front and a rear door.
+    Cut::new((0.020, 0.385), (0.487, 0.513)),
+    Cut::new((0.615, 0.980), (0.487, 0.513)),
+];
+
+/// How far a pressing stands off the glass it is trimming, as a fraction of the
+/// section's radius.
+///
+/// Small: a pillar is flush with its glass on any car built since the seventies,
+/// and what makes it read is that it is painted, not that it sticks out. This
+/// only has to beat the depth buffer.
+const SEAL: f32 = 0.006;
+
+/// How much smaller than the glazing the cabin liner is built.
+const LINER: f32 = 0.985;
+
 /// The three lofts for one archetype.
 ///
 /// Arches need three or four sections each rather than one: a single raised
@@ -317,7 +516,7 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
     match class {
         // Three-box saloon: short bonnet, upright screen, a boot behind the
         // cabin. The default shape of a car.
-        VehicleClass::Sedan | VehicleClass::Police => BodyProfile {
+        VehicleClass::Sedan => BodyProfile {
             // Just above the widest part of the section, where a saloon's
             // shoulder line runs.
             belt: 0.10,
@@ -361,6 +560,7 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
                 Section::new(0.74, 0.74, 0.22, 0.68, 3.5),
                 Section::new(0.82, 0.54, 0.20, 0.40, 3.0),
             ],
+            windows: Vec::new(),
         },
 
         // Long bonnet, short deck, fastback roof running unbroken into the
@@ -411,6 +611,7 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
                 Section::new(0.86, 0.66, 0.18, 0.52, 3.5),
                 Section::new(0.95, 0.50, 0.16, 0.30, 3.0),
             ],
+            windows: Vec::new(),
         },
 
         // Cab forward, open bed behind. The step down from roof to bed sides is
@@ -461,6 +662,7 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
                 Section::new(0.60, 0.80, 0.32, 0.92, 4.5),
                 Section::new(0.62, 0.66, 0.30, 0.60, 3.5),
             ],
+            windows: Vec::new(),
         },
 
         // Mid-engined wedge: nose almost on the floor, screen raked hard, the
@@ -507,6 +709,7 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
                 Section::new(0.77, 0.66, 0.16, 0.56, 3.0),
                 Section::new(0.88, 0.50, 0.12, 0.30, 2.5),
             ],
+            windows: Vec::new(),
         },
 
         // Box van: one volume, flat sides, a short snub nose. Nearly all the
@@ -547,8 +750,18 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
                 Section::new(1.00, 0.62, -0.58, -0.22, 5.0),
             ],
             // The cab glass is part of the box, so there is no separate
-            // greenhouse to raise above it.
+            // greenhouse to raise above it — the glazing is cut out of the box.
             cabin: Vec::new(),
+            windows: vec![
+                // The windscreen is the top of the box where the box is still
+                // climbing — on a nose this snub that is the whole front face,
+                // and there is no bonnet for it to stop at.
+                Cut::new((0.330, 0.670), (0.035, 0.150)),
+                // Cab door glass: the upper flank, ending before the shell's
+                // first wheel arch.
+                Cut::new((0.300, 0.380), (0.140, 0.280)),
+                Cut::new((0.620, 0.700), (0.140, 0.280)),
+            ],
         },
     }
 }
@@ -561,7 +774,7 @@ pub fn profile(class: VehicleClass) -> BodyProfile {
 /// tyres end up buried in the flanks. Pulling the panels in by a few centimetres
 /// puts the wheels back outside them, which is what reads as a car having
 /// wheels at all.
-const BODY_INSET: f32 = 0.93;
+pub const BODY_INSET: f32 = 0.93;
 
 /// Two faces meeting at more than this are a crease, not a curve.
 ///
@@ -675,6 +888,27 @@ fn split_creases(mut mesh: Mesh, degrees: f32) -> Mesh {
     mesh
 }
 
+/// Turns a closed mesh into a view of its own inside.
+///
+/// The winding is reversed and the normals recomputed from it, so the surface
+/// that survives backface culling is the *far* one and it is lit as though it
+/// faced the viewer. That is what a cabin liner is: look in through a
+/// windscreen and you should see the back of the car, not the street beyond it.
+///
+/// Done in the geometry rather than with the material's `cull_mode`, which
+/// expresses the same thing and left the liner invisible on the deferred path.
+/// A car you can see straight through is not a subtle failure, and the
+/// screenshot that found it is the reason this is geometry now.
+pub fn inside_out(mut mesh: Mesh) -> Mesh {
+    if let Some(Indices::U32(indices)) = mesh.indices_mut() {
+        for triangle in indices.as_chunks_mut::<3>().0 {
+            triangle.swap(1, 2);
+        }
+    }
+    mesh.compute_smooth_normals();
+    mesh
+}
+
 /// Pushes a dent into a body panel.
 ///
 /// `from` is the direction the blow arrived along, in body space. The dent is
@@ -719,7 +953,14 @@ pub fn dent(mesh: &mut Mesh, from: Vec3, depth: f32, radius: f32) {
 pub struct BodyMeshes {
     pub shell: Mesh,
     pub lower: Mesh,
+    /// The greenhouse, which is glazing and nothing else.
     pub cabin: Option<Mesh>,
+    /// The steel over the greenhouse: roof, headers, pillars.
+    pub frame: Option<Mesh>,
+    /// Glazing lying on the shell, for a cab with no greenhouse.
+    pub windows: Option<Mesh>,
+    /// The cabin, seen from inside it.
+    pub liner: Option<Mesh>,
 }
 
 pub fn build(class: VehicleClass, spec: &VehicleSpec) -> BodyMeshes {
@@ -734,6 +975,23 @@ pub fn build(class: VehicleClass, spec: &VehicleSpec) -> BodyMeshes {
         ),
         lower: loft(&profile.lower, scale, None),
         cabin: (!profile.cabin.is_empty()).then(|| loft(&profile.cabin, scale, None)),
+        // A shade smaller than the glazing so the two never fight over the
+        // depth buffer, and inside out so only its far wall is drawn.
+        liner: (!profile.cabin.is_empty())
+            .then(|| inside_out(loft(&profile.cabin, scale * LINER, None))),
+        frame: (!profile.cabin.is_empty())
+            .then(|| panels(&profile.cabin, &GREENHOUSE, scale, None, SEAL)),
+        // The van's glass lies *on* its bodywork rather than in a hole cut
+        // through it, so it is lifted by a seal's worth like a pressing is.
+        windows: (!profile.windows.is_empty()).then(|| {
+            panels(
+                &profile.shell,
+                &profile.windows,
+                scale,
+                Some(profile.belt),
+                SEAL,
+            )
+        }),
     }
 }
 
@@ -813,12 +1071,13 @@ mod tests {
     fn a_cabin_sits_above_its_shells_beltline() {
         // If the greenhouse is not taller than the body it is set into, it is
         // invisible and the car reads as a brick.
+        // Every shape with a passenger cabin. A truck is a cab and a box, and
+        // its roofline is the top of the shell rather than of a greenhouse.
         for class in [
             VehicleClass::Sedan,
             VehicleClass::Coupe,
             VehicleClass::Sports,
             VehicleClass::Pickup,
-            VehicleClass::Police,
         ] {
             let BodyProfile { shell, cabin, .. } = profile(class);
             let beltline = shell.iter().map(|s| s.top).fold(f32::MIN, f32::max);
@@ -945,6 +1204,170 @@ mod tests {
                 "a dent must not push a panel out"
             );
         }
+    }
+
+    #[test]
+    fn a_cabin_is_described_in_six_parts() {
+        // `GREENHOUSE` is one table shared by every archetype, and it can only
+        // be shared because index space means the same thing on all of them.
+        // A cabin with a seventh section would slide every pillar on that car
+        // to somewhere it does not belong, and nothing would fail to build.
+        for class in VehicleClass::ALL {
+            let cabin = profile(class).cabin;
+            if cabin.is_empty() {
+                continue;
+            }
+            assert_eq!(
+                cabin.len(),
+                6,
+                "{class:?} has {} cabin sections; GREENHOUSE assumes six",
+                cabin.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_pressing_sits_on_the_glass_it_trims() {
+        // The frame is cut from the same loft as the glazing, so every point of
+        // it has to land just outside the surface it came from: too far in and
+        // it is inside the cabin, too far out and it floats.
+        let class = VehicleClass::Sedan;
+        let spec = class.spec();
+        let profile = profile(class);
+        let scale = spec.half_extents * Vec3::new(BODY_INSET, 1.0, 1.0);
+
+        for cut in &GREENHOUSE {
+            for &v in &[0.0f32, 0.5, 1.0] {
+                for &u in &[0.0f32, 0.5, 1.0] {
+                    let along = cut.along.0.lerp(cut.along.1, v);
+                    let around = cut.around.0.lerp(cut.around.1, u);
+                    let section = section_at(&profile.cabin, along);
+                    let glass = ring_point(&section, scale, None, around);
+                    let centre = section_centre(&section, scale);
+                    let steel = centre + (glass - centre) * (1.0 + SEAL);
+                    let gap = steel.distance(glass);
+                    assert!(
+                        (0.0005..0.010).contains(&gap),
+                        "a pressing stands {gap:.4}m off the glass at ({around}, {along})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_frame_leaves_a_windscreen_and_side_glass_uncovered() {
+        // The whole point of the cut table is what it does *not* cover. Cover
+        // the lot and the car has no windows; cover none of it and it has no
+        // pillars, and either way it still builds.
+        let covered = |around: f32, along: f32| {
+            GREENHOUSE.iter().any(|cut| {
+                (cut.around.0..=cut.around.1).contains(&around)
+                    && (cut.along.0..=cut.along.1).contains(&along)
+            })
+        };
+
+        // Roof, both A-pillars, both C-pillars, the B-pillar.
+        assert!(covered(0.50, 0.50), "no roof");
+        assert!(covered(0.25, 0.15) && covered(0.75, 0.15), "no A-pillar");
+        assert!(covered(0.25, 0.85) && covered(0.75, 0.85), "no C-pillar");
+        assert!(covered(0.25, 0.50) && covered(0.75, 0.50), "no B-pillar");
+
+        // Windscreen, backlight, and a door window on each side of the
+        // B-pillar, on both flanks.
+        assert!(!covered(0.50, 0.12), "the windscreen is steel");
+        assert!(!covered(0.50, 0.88), "the backlight is steel");
+        for around in [0.25f32, 0.75] {
+            assert!(!covered(around, 0.42), "no front door glass at {around}");
+            assert!(!covered(around, 0.58), "no rear door glass at {around}");
+        }
+
+        // And how *much* of it is left over. Every point above is satisfied by
+        // pillars wide enough to leave two slots, which is exactly what the
+        // first table did: a third of the cabin to each end pillar turned a
+        // coupé's short greenhouse into more paint than glass. Half the length
+        // of a flank has to be daylight.
+        let steps = 500;
+        let daylight = (0..steps)
+            .filter(|i| !covered(0.25, (*i as f32 + 0.5) / steps as f32))
+            .count() as f32
+            / steps as f32;
+        assert!(
+            daylight > 0.5,
+            "only {:.0}% of a flank is glass; the pillars have eaten the windows",
+            daylight * 100.0
+        );
+
+        // The frame has to be closed, too: a pillar that stops short of the
+        // roof leaves a rib of glass running over the car between them.
+        for edge in [0.215f32, 0.785] {
+            assert!(
+                covered(0.25, edge - 1e-3) != covered(0.50, edge - 1e-3),
+                "the roof and the pillars disagree about where {edge} is"
+            );
+        }
+    }
+
+    #[test]
+    fn a_panel_is_wound_the_same_way_as_the_loft_under_it() {
+        // A patch taken off the outside of a body and wound the wrong way is
+        // invisible from outside and perfectly visible from within, which on a
+        // car reads as the roof having been left off.
+        let class = VehicleClass::Sedan;
+        let spec = class.spec();
+        let profile = profile(class);
+        let scale = spec.half_extents * Vec3::new(BODY_INSET, 1.0, 1.0);
+        // The roof: its faces must point up.
+        let mesh = panel(&profile.cabin, &GREENHOUSE[0], scale, None, SEAL);
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(|a| a.as_float3())
+            .expect("positions");
+        let Some(Indices::U32(indices)) = mesh.indices() else {
+            panic!("a panel is indexed");
+        };
+
+        let mut up = 0;
+        for triangle in indices.as_chunks::<3>().0 {
+            let [a, b, c] = triangle.map(|v| Vec3::from(positions[v as usize]));
+            if (b - a).cross(c - a).normalize_or_zero().y > 0.0 {
+                up += 1;
+            }
+        }
+        assert_eq!(
+            up,
+            indices.len() / 3,
+            "{} of {} roof faces point downwards",
+            indices.len() / 3 - up,
+            indices.len() / 3
+        );
+    }
+
+    #[test]
+    fn a_van_is_glazed_even_though_it_has_no_greenhouse() {
+        let class = VehicleClass::Truck;
+        let spec = class.spec();
+        let built = build(class, &spec);
+        assert!(built.cabin.is_none() && built.frame.is_none());
+        let windows = built.windows.expect("a van needs a windscreen");
+        assert!(vertex_count(&windows) > 8);
+
+        // And that glazing has to be in the upper half of the box and at the
+        // front of it, or it is a sunroof or a rear door.
+        let positions = windows
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(|a| a.as_float3())
+            .expect("positions");
+        let lowest = positions.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+        let furthest = positions.iter().map(|p| p[2]).fold(f32::MIN, f32::max);
+        assert!(
+            lowest > 0.0,
+            "the cab glazing reaches down to {lowest:.2}m, below the waist"
+        );
+        assert!(
+            furthest < 0.0,
+            "the cab glazing reaches {furthest:.2}m, behind the middle of the van"
+        );
     }
 
     #[test]

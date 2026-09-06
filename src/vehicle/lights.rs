@@ -1,4 +1,4 @@
-//! Head, tail and beacon lights.
+//! Head and tail lights.
 //!
 //! Two separate things wear the name "light" here, and keeping them apart is
 //! what keeps this cheap:
@@ -19,8 +19,7 @@ use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::prelude::*;
 
 use super::controller::VehicleInput;
-use super::spec::{VehicleClass, VehicleSpec};
-use crate::ai::police::{PoliceUnit, PursuitState};
+use super::spec::VehicleSpec;
 use crate::core::schedule::GameSet;
 use crate::player::interact::DrivenBy;
 use crate::world::timeofday::{TimeOfDay, daylight};
@@ -29,9 +28,6 @@ use crate::world::timeofday::{TimeOfDay, daylight};
 const BEAM_INTENSITY: f32 = 900_000.0;
 /// How far a beam reaches before it is cut off.
 const BEAM_RANGE: f32 = 70.0;
-/// Seconds per complete red-blue cycle on a police roof.
-const BEACON_PERIOD: f32 = 0.62;
-
 /// A headlight lens. Purely visual.
 #[derive(Component)]
 pub struct Headlight;
@@ -43,13 +39,6 @@ pub struct TailLamp;
 /// The spot light a driven car throws down the road.
 #[derive(Component)]
 pub struct HeadlightBeam;
-
-/// One half of a police light bar.
-#[derive(Component)]
-pub struct Beacon {
-    /// Beacons on opposite corners run in antiphase, so the bar alternates.
-    pub blue: bool,
-}
 
 /// Shared meshes and materials for every lamp in the city.
 #[derive(Resource)]
@@ -65,8 +54,6 @@ pub struct LightAssets {
     tail: Handle<StandardMaterial>,
     /// Swapped in for [`Self::tail`] under braking.
     brake: Handle<StandardMaterial>,
-    beacon_red: Handle<StandardMaterial>,
-    beacon_blue: Handle<StandardMaterial>,
 }
 
 /// A lens that is off has to stay a plausible object in daylight, so each of
@@ -91,8 +78,6 @@ pub fn build_assets(
         headlight: materials.add(lens_material(Color::srgb(0.92, 0.92, 0.86))),
         tail: materials.add(lens_material(Color::srgb(0.42, 0.06, 0.06))),
         brake: materials.add(lens_material(Color::srgb(0.55, 0.08, 0.08))),
-        beacon_red: materials.add(lens_material(Color::srgb(0.45, 0.05, 0.05))),
-        beacon_blue: materials.add(lens_material(Color::srgb(0.06, 0.10, 0.45))),
     }
 }
 
@@ -119,57 +104,38 @@ fn lamps_for(
     spec: &VehicleSpec,
 ) {
     let half = spec.half_extents;
-    // Set into the flanks just behind the nose and just ahead of the tail,
-    // rather than pinned to the collider box: the bodywork tucks in at both
-    // ends, and a lamp on the box's corner hangs in the air beside the car.
-    let nose = -half.z * 0.95;
-    let tail = half.z * 0.96;
-    let lamp_y = half.y * 0.06;
-    let lamp_x = half.x * 0.44;
+    // Measured off the profile the bodywork was lofted from, not off the
+    // collider. Pinned to the box, a lamp sat at a height and a width the nose
+    // does not reach at that station and hung in the air beside the car — which
+    // is a thing you only notice once you look at a screenshot, because it
+    // reads as a styling choice until you measure it.
+    let fit = super::trim::Fittings::of(spec.class, spec);
+    let width = fit.lamp_width;
 
     for side in [-1.0f32, 1.0] {
+        // Set half a lamp in from the widest point the nose reaches at this
+        // height, so the outer edge lands on the bodywork rather than past it.
+        let x = side * (fit.lamp_x - width * 0.5);
         parent.spawn((
             Headlight,
             Mesh3d(assets.lens.clone()),
             MeshMaterial3d(assets.dark_glass.clone()),
-            Transform::from_xyz(side * lamp_x, lamp_y, nose).with_scale(Vec3::new(
-                half.x * 0.42,
-                half.y * 0.26,
-                0.06,
+            Transform::from_xyz(x, fit.lamp_y, fit.nose - 0.03).with_scale(Vec3::new(
+                width,
+                half.y * 0.22,
+                0.07,
             )),
         ));
         parent.spawn((
             TailLamp,
             Mesh3d(assets.lens.clone()),
             MeshMaterial3d(assets.dark_lamp.clone()),
-            Transform::from_xyz(side * lamp_x, lamp_y, tail).with_scale(Vec3::new(
-                half.x * 0.36,
-                half.y * 0.22,
-                0.06,
+            Transform::from_xyz(x, fit.lamp_y, fit.tail + 0.03).with_scale(Vec3::new(
+                width * 0.88,
+                half.y * 0.19,
+                0.07,
             )),
         ));
-    }
-
-    if spec.class == VehicleClass::Police {
-        // The bar sits above the cabin, whose roof `spawn_vehicle` puts at
-        // roughly 1.64 half-heights.
-        let roof = half.y * 1.72;
-        for (side, blue) in [(-1.0f32, false), (1.0, true)] {
-            parent.spawn((
-                Beacon { blue },
-                Mesh3d(assets.lens.clone()),
-                MeshMaterial3d(if blue {
-                    assets.beacon_blue.clone()
-                } else {
-                    assets.beacon_red.clone()
-                }),
-                Transform::from_xyz(side * half.x * 0.34, roof, 0.0).with_scale(Vec3::new(
-                    half.x * 0.42,
-                    0.11,
-                    0.22,
-                )),
-            ));
-        }
     }
 }
 
@@ -184,8 +150,6 @@ impl Plugin for VehicleLightsPlugin {
                 set_lamp_glow,
                 switch_beams,
                 switch_driven_lamps,
-                flash_beacons,
-                police_beacon_wash,
             )
                 .in_set(GameSet::Simulation),
         );
@@ -236,8 +200,16 @@ fn switch_beams(
     >,
     mut beams: Query<&mut SpotLight, With<HeadlightBeam>>,
     existing: Query<&HeadlightBeam>,
+    config: Res<crate::core::config::GameConfig>,
 ) {
     let night = night_factor(clock.hours);
+    // A beam is born at dusk and dies at dawn, so it can never be picked up by
+    // `render::volumetrics`, which attaches its lights once and then sleeps on
+    // a change detector. The component has to go on at spawn instead — which
+    // is the better place for it anyway: the tier is read at the one moment
+    // the light exists to read it for.
+    let volumetric =
+        config.graphics.volumetrics == crate::render::quality::Volumetrics::FogAndLights;
 
     for (vehicle, spec, children) in &driven {
         let beam = children
@@ -254,25 +226,34 @@ fn switch_beams(
             }
             (true, None) => {
                 let half = spec.half_extents;
-                commands.entity(vehicle).with_child((
-                    HeadlightBeam,
-                    SpotLight {
-                        color: Color::srgb(1.0, 0.97, 0.90),
-                        intensity: BEAM_INTENSITY * night,
-                        range: BEAM_RANGE,
-                        inner_angle: 0.22,
-                        outer_angle: 0.62,
-                        // Shadowed spot lights on every car in a chase is the
-                        // one thing here that would actually cost frames.
-                        shadow_maps_enabled: false,
-                        ..default()
-                    },
-                    // Spot lights fire along -Z, which is also the car's
-                    // forward; the pitch is the dip that keeps the beam on the
-                    // road instead of in oncoming windscreens.
-                    Transform::from_xyz(0.0, half.y * 0.1, -half.z)
-                        .with_rotation(Quat::from_rotation_x(-0.16)),
-                ));
+                commands.entity(vehicle).with_children(|car| {
+                    let mut light = car.spawn((
+                        HeadlightBeam,
+                        SpotLight {
+                            color: Color::srgb(1.0, 0.97, 0.90),
+                            intensity: BEAM_INTENSITY * night,
+                            range: BEAM_RANGE,
+                            inner_angle: 0.22,
+                            outer_angle: 0.62,
+                            // Shadowed spot lights on every car in a chase is
+                            // the one thing here that would actually cost
+                            // frames.
+                            shadow_maps_enabled: false,
+                            ..default()
+                        },
+                        // Spot lights fire along -Z, which is also the car's
+                        // forward; the pitch is the dip that keeps the beam on
+                        // the road instead of in oncoming windscreens.
+                        Transform::from_xyz(0.0, half.y * 0.1, -half.z)
+                            .with_rotation(Quat::from_rotation_x(-0.16)),
+                    ));
+                    if volumetric {
+                        // What turns a lit patch of road into a pair of cones
+                        // coming at you through the drizzle. It has to go on
+                        // the spot light itself, not alongside it.
+                        light.insert(bevy::light::VolumetricLight);
+                    }
+                });
             }
             (false, Some(beam)) => commands.entity(beam).despawn(),
             (false, None) => {}
@@ -329,95 +310,6 @@ fn switch_driven_lamps(
     }
 }
 
-/// Runs the light bars.
-///
-/// All police share one pair of materials, so every bar in the city flashes
-/// together — which is what a convoy of cruisers does anyway, and it keeps the
-/// whole effect at two material writes a frame. The cost of sharing is that
-/// "is anyone actually on a call" has to be answered once for the whole force
-/// rather than per car; a cruiser sitting at a kerb with its bar going is a
-/// cruiser that has stopped meaning anything when it does.
-fn flash_beacons(
-    time: Res<Time>,
-    assets: Res<LightAssets>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    units: Query<&PoliceUnit>,
-) {
-    let responding = units
-        .iter()
-        .any(|unit| unit.state != PursuitState::Responding || unit.has_sight);
-
-    let phase = (time.elapsed_secs() / BEACON_PERIOD).fract();
-    // A hard square wave, not a sine: emergency lights strobe, and a smooth
-    // fade reads as a fairground.
-    let (red, blue) = if !responding {
-        (0.0, 0.0)
-    } else if phase < 0.5 {
-        (1.0, 0.0)
-    } else {
-        (0.0, 1.0)
-    };
-
-    if let Some(mut material) = materials.get_mut(&assets.beacon_red) {
-        material.emissive = LinearRgba::rgb(46.0 * red, 1.5 * red, 1.0 * red);
-    }
-    if let Some(mut material) = materials.get_mut(&assets.beacon_blue) {
-        material.emissive = LinearRgba::rgb(1.5 * blue, 6.0 * blue, 48.0 * blue);
-    }
-}
-
-/// The wash a light bar throws onto the road and the surrounding buildings.
-///
-/// One point light per cruiser rather than one per beacon, with the colour
-/// alternating, because at any moment only one half of the bar is lit anyway.
-fn police_beacon_wash(
-    mut commands: Commands,
-    time: Res<Time>,
-    units: Query<(Entity, &PoliceUnit, Option<&Children>)>,
-    mut washes: Query<&mut PointLight, With<Beacon>>,
-    beacons: Query<&Beacon>,
-) {
-    let phase = (time.elapsed_secs() / BEACON_PERIOD).fract();
-    let red = phase < 0.5;
-    let color = if red {
-        Color::srgb(1.0, 0.12, 0.10)
-    } else {
-        Color::srgb(0.15, 0.35, 1.0)
-    };
-
-    for (unit, police, children) in &units {
-        let running = police.state != PursuitState::Responding || police.has_sight;
-
-        let wash = children
-            .into_iter()
-            .flatten()
-            .copied()
-            .find(|&child| beacons.get(child).is_ok() && washes.contains(child));
-
-        match wash {
-            Some(wash) => {
-                if let Ok(mut light) = washes.get_mut(wash) {
-                    light.color = color;
-                    light.intensity = if running { 260_000.0 } else { 0.0 };
-                }
-            }
-            None => {
-                commands.entity(unit).with_child((
-                    Beacon { blue: false },
-                    PointLight {
-                        color,
-                        intensity: 0.0,
-                        range: 26.0,
-                        shadow_maps_enabled: false,
-                        ..default()
-                    },
-                    Transform::from_xyz(0.0, 1.4, 0.0),
-                ));
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,14 +328,5 @@ mod tests {
             "headlights should be on while it is still technically day"
         );
         assert!(night_factor(17.6) < 1.0, "but not yet at full");
-    }
-
-    #[test]
-    fn the_beacon_bar_alternates() {
-        // Half a period apart, the two halves must disagree.
-        let lit = |t: f32| (t / BEACON_PERIOD).fract() < 0.5;
-        assert!(lit(0.0));
-        assert!(!lit(BEACON_PERIOD * 0.5));
-        assert!(lit(BEACON_PERIOD));
     }
 }

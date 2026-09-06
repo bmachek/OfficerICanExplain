@@ -32,6 +32,7 @@ pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
+        let bounce = app.world().resource::<GameConfig>().bounce.clone();
         app.add_plugins((
             PhysicsPlugins::default(),
             material::MaterialLibraryPlugin,
@@ -42,6 +43,21 @@ impl Plugin for WorldPlugin {
             streetlights::StreetLightPlugin,
             vegetation::VegetationPlugin,
         ))
+        // Everything in this city is made of rubber, and the solver is where
+        // that is decided. `Max` rather than the default average: a rubber ball
+        // bounces off concrete because *it* is elastic, and asking concrete to
+        // agree would flatten every bounce against the world by half.
+        .insert_resource(DefaultRestitution(
+            Restitution::new(bounce.restitution).with_combine_rule(CoefficientCombine::Max),
+        ))
+        .insert_resource(avian3d::dynamics::solver::SolverConfig {
+            restitution_threshold: bounce.threshold,
+            // One pass leaves a body resting on a floor with several contact
+            // points bouncing unevenly, which reads as a wobble rather than as
+            // rubber.
+            restitution_iterations: 4,
+            ..default()
+        })
         .init_resource::<streaming::ActiveChunks>()
         .init_resource::<streaming::StreamTimer>()
         .add_systems(PreStartup, facade::load_shader)

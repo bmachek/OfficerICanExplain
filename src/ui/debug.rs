@@ -6,11 +6,13 @@
 
 use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
+use bevy_egui::{EguiContexts, EguiPrimaryContextPass, egui};
 use leafwing_input_manager::prelude::ActionState;
 
+use crate::ai::pedestrian::Pedestrian;
 use crate::core::config::GameConfig;
 use crate::core::states::AppState;
+use crate::mood::feeling::{CityMood, Tempers};
 use crate::player::camera::CameraRig;
 use crate::player::input::Action;
 use crate::player::interact::Driving;
@@ -25,18 +27,22 @@ pub struct DebugUiPlugin;
 
 impl Plugin for DebugUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((EguiPlugin::default(), FpsOverlayPlugin::default()))
+        app.add_plugins(FpsOverlayPlugin::default())
             .add_systems(EguiPrimaryContextPass, (tuning_panel, vehicle_panel));
     }
 }
 
 fn tuning_panel(
+    mut commands: Commands,
     mut contexts: EguiContexts,
     mut config: ResMut<GameConfig>,
     mut weather: ResMut<Weather>,
+    mut tempers: ResMut<Tempers>,
+    city: Res<CityMood>,
     caps: Res<Capabilities>,
     state: Res<State<AppState>>,
     cameras: Query<(&Transform, &CameraRig)>,
+    crowd: Query<Entity, With<Pedestrian>>,
     actions: Query<&ActionState<Action>>,
 ) -> Result {
     let ctx = contexts.ctx_mut()?;
@@ -87,6 +93,9 @@ fn tuning_panel(
             ui.add(egui::Slider::new(&mut config.audio.ambience, 0.0..=1.5).text("ambience"));
 
             ui.separator();
+            mood_section(ui, &mut commands, &mut config, &mut tempers, &city, &crowd);
+
+            ui.separator();
             weather_section(ui, &mut weather, &mut config);
 
             ui.separator();
@@ -98,10 +107,11 @@ fn tuning_panel(
                 let movement = action_state.clamped_axis_pair(&Action::Move);
                 ui.label(format!("move:   {:+.2}, {:+.2}", movement.x, movement.y));
                 ui.label(format!(
-                    "jump {}   sprint {}   fire {}",
+                    "jump {}   sprint {}   taunt {}   cheer {}",
                     action_state.pressed(&Action::Jump),
                     action_state.pressed(&Action::Sprint),
-                    action_state.pressed(&Action::Fire),
+                    action_state.pressed(&Action::Taunt),
+                    action_state.pressed(&Action::Cheer),
                 ));
             } else {
                 ui.label("no input carrier");
@@ -110,7 +120,7 @@ fn tuning_panel(
             ui.separator();
             ui.label(
                 egui::RichText::new(
-                    "WASD move · Shift sprint · Space jump · RMB aim · F1 free cam (RMB look)",
+                    "WASD move · Shift sprint · Space jump · LMB taunt · RMB cheer · F1 free cam",
                 )
                 .small()
                 .weak(),
@@ -118,6 +128,68 @@ fn tuning_panel(
         });
 
     Ok(())
+}
+
+/// How the city feels, and the five dispositions it is made of.
+///
+/// The whole game is the interaction between these numbers, and no amount of
+/// reasoning about them substitutes for pushing one and watching a street turn.
+/// The temperaments are the awkward half: a citizen draws its disposition once,
+/// at spawn, so editing the table changes nobody who is already walking about.
+/// Rather than reach into every flummi and rewrite it — which would also have
+/// to decide what to do about the one currently chasing you — the panel simply
+/// offers to clear the crowd. `maintain_population` refills it from the new
+/// table within a second or two, which is both simpler and easier to believe.
+fn mood_section(
+    ui: &mut egui::Ui,
+    commands: &mut Commands,
+    config: &mut GameConfig,
+    tempers: &mut Tempers,
+    city: &CityMood,
+    crowd: &Query<Entity, With<Pedestrian>>,
+) {
+    ui.label(egui::RichText::new("mood").strong());
+    ui.label(format!(
+        "you {:+.2}   city {:+.2}   over {} flummis",
+        city.player, city.average, city.crowd
+    ));
+
+    let m = &mut config.mood;
+    ui.add(egui::Slider::new(&mut m.contagion_radius, 0.0..=30.0).text("contagion m"));
+    ui.add(egui::Slider::new(&mut m.contagion_rate, 0.0..=4.0).text("contagion rate"));
+    ui.add(egui::Slider::new(&mut m.bop_limit, 0.5..=20.0).text("bop limit m/s"));
+    ui.add(egui::Slider::new(&mut m.outrage_limit, 2.0..=40.0).text("outrage m/s"));
+    ui.add(egui::Slider::new(&mut m.taunt_radius, 1.0..=40.0).text("taunt m"));
+    ui.add(egui::Slider::new(&mut m.cheer_radius, 1.0..=40.0).text("cheer m"));
+    ui.add(egui::Slider::new(&mut m.taunt_bite, 0.0..=2.0).text("taunt bite"));
+    ui.add(egui::Slider::new(&mut m.cheer_warmth, 0.0..=2.0).text("cheer warmth"));
+    ui.add(egui::Slider::new(&mut m.provoke_rest, 0.05..=4.0).text("provoke rest s"));
+    ui.add(egui::Slider::new(&mut m.grudge_seconds, 0.0..=30.0).text("grudge s"));
+    ui.add(egui::Slider::new(&mut m.grudge_speed, 0.0..=12.0).text("grudge m/s"));
+
+    ui.collapsing("tempers", |ui| {
+        for kind in &mut tempers.0 {
+            ui.collapsing(kind.name, |ui| {
+                let t = &mut kind.temper;
+                ui.add(egui::Slider::new(&mut kind.share, 0.0..=1.0).text("share"));
+                ui.add(egui::Slider::new(&mut t.baseline, -1.0..=1.0).text("baseline"));
+                ui.add(egui::Slider::new(&mut t.fuse, 0.0..=2.0).text("fuse"));
+                ui.add(egui::Slider::new(&mut t.recovery, 0.0..=1.5).text("recovery"));
+                ui.add(egui::Slider::new(&mut t.contagion, 0.0..=1.5).text("contagion"));
+                ui.add(egui::Slider::new(&mut t.grudge, 0.0..=1.0).text("grudge"));
+            });
+        }
+        if ui.button("re-roll the crowd").clicked() {
+            for pedestrian in crowd {
+                commands.entity(pedestrian).despawn();
+            }
+        }
+        ui.label(
+            egui::RichText::new("edits apply to flummis spawned from now on")
+                .small()
+                .weak(),
+        );
+    });
 }
 
 /// The live sky, and a way to take it over.

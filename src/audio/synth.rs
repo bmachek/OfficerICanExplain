@@ -225,6 +225,95 @@ impl Resonator {
     }
 }
 
+/// A phase accumulator.
+///
+/// The only correct way to make a tone whose pitch changes. Computing
+/// `sin(TAU * f * t)` with a new `f` every sample is not a glide — it is a
+/// series of unrelated tones, and it clicks at every one of them. Accumulating
+/// the phase instead means the waveform is always continuous however wildly the
+/// frequency is swept, which is what a portamento whistle and a boing both are.
+///
+/// The phase is kept in `f64`: a sound a few seconds long accumulates hundreds
+/// of thousands of radians, and `f32` runs out of mantissa to hold the fraction
+/// long before that.
+#[derive(Default)]
+pub struct Osc {
+    phase: f64,
+}
+
+impl Osc {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Advances one sample at `hz` and returns the new phase, in turns: 0 to 1
+    /// around the circle. Turns rather than radians because the waveforms that
+    /// are not sines — a glottal pulse, a sawtooth — are all written as a shape
+    /// over the unit interval.
+    pub fn advance(&mut self, hz: f32) -> f32 {
+        self.phase += hz as f64 / SAMPLE_RATE as f64;
+        self.phase -= self.phase.floor();
+        self.phase as f32
+    }
+
+    pub fn sine(&mut self, hz: f32) -> f32 {
+        (std::f32::consts::TAU * self.advance(hz)).sin()
+    }
+}
+
+/// One pulse of the vocal folds opening and closing, over a phase in 0..1.
+///
+/// The Rosenberg shape: a slow opening, a faster closing, then a closed phase
+/// where nothing happens. The asymmetry is the whole point — it is what puts
+/// energy in the upper harmonics for the formants to pick out, and a symmetric
+/// pulse (or a plain sine) filtered by [`Formant`] sounds like a kazoo rather
+/// than a throat.
+pub fn glottal(phase: f32) -> f32 {
+    const OPEN: f32 = 0.42;
+    const CLOSE: f32 = 0.16;
+    if phase < OPEN {
+        0.5 * (1.0 - (std::f32::consts::PI * phase / OPEN).cos())
+    } else if phase < OPEN + CLOSE {
+        (std::f32::consts::FRAC_PI_2 * (phase - OPEN) / CLOSE).cos()
+    } else {
+        0.0
+    }
+}
+
+/// The three resonances that turn a buzz into a vowel.
+///
+/// A vowel is not a waveform, it is a filter: the throat and mouth ring at
+/// three frequencies, and which three decides whether the same buzz comes out
+/// as "ah" or "ee". [`Resonator`] is already a band-pass, so a vowel is three
+/// of them in parallel and nothing else.
+///
+/// The bandwidths widen with frequency because a real vocal tract's do — a
+/// first formant is a narrow, strong resonance and a third is a broad, weak
+/// one. Equal bandwidths give three whistles rather than a voice.
+pub struct Formant {
+    bands: [(Resonator, f32); 3],
+}
+
+impl Formant {
+    pub fn new(hz: [f32; 3]) -> Self {
+        Self {
+            bands: [
+                (Resonator::new(hz[0], 80.0), 1.00),
+                (Resonator::new(hz[1], 110.0), 0.62),
+                (Resonator::new(hz[2], 170.0), 0.30),
+            ],
+        }
+    }
+
+    pub fn process(&mut self, input: f32) -> f32 {
+        let mut out = 0.0;
+        for (band, weight) in &mut self.bands {
+            out += band.process(input) * *weight;
+        }
+        out
+    }
+}
+
 /// One partial of a periodic waveform.
 pub struct Partial {
     /// Multiple of the loop's own frequency. Must be a whole number, or the
